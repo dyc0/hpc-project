@@ -3,23 +3,58 @@
 #include <string>
 #include <cstddef>
 
-int
-main()
-{
-  // Uncomment the option you want to run.
+#include <algorithm>
+#include <cmath>
+#include <iostream>
 
-  // Option 1 - Solving simple problem: water drops in a box
-  const int test_case_id = 1;  // Water drops in a box
+#include <mpi.h>
+
+int
+main(int argc, char ** argv)
+{
+  MPI_Init(&argc, &argv);
+
+  int world_size;
+  MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
+  // **************************************************************
+  // ********************** SIMULATION PARAMETERS *****************
+  // **************************************************************
   const double Tend = 1.0;     // Simulation time in hours
-  const std::size_t nx = 1000; // Number of cells per direction.
-  const std::size_t ny = 1000; // Number of cells per direction.
+  const std::size_t nx = 62; // Number of cells per direction.
+  const std::size_t ny = 62; // Number of cells per direction.
   const std::size_t output_n = 20; // For profiling, I use 0
                                   // TODO: Come back to this and profile IO
+
+                                  
+  // **************************************************************
+  // ********************** MPI INITIALIZATION *********************
+  // **************************************************************
+  // Note: for nx, ny undefined, we can leave dims = {0, 0} and let MPI decide the dimensions.
+  int dims[2] = {0, 0};
+  dims[0] = std::max(1, static_cast<int>(std::sqrt(world_size * ny / static_cast<double>(nx))));
+  dims[1] = world_size / dims[0];
+  MPI_Dims_create(world_size, 2, dims);
+
+  int periods[2] = {0, 0}; // Non-periodic
+  MPI_Comm cart_comm;
+  MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &cart_comm);
+
+
+  // **************************************************************
+  // ********************** TEST CASE 1 ***************************
+  // **************************************************************
+  // Uncomment the option you want to run.
+  // Option 1 - Solving simple problem: water drops in a box
+  const int test_case_id = 1;  // Water drops in a box
   const std::string output_fname = "water_drops";
   const bool full_log = false;
 
-  SWESolver solver(test_case_id, nx, ny);
-  solver.solve(Tend, full_log, output_n, output_fname);
+  SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
+  // solver.solve(Tend, full_log, output_n, output_fname);
+  
+  MPI_Comm_free(&cart_comm);
+  MPI_Finalize();
 
   // // Option 2 - Solving analytical (dummy) tsunami example.
   // const int test_case_id = 2;  // Analytical tsunami test case

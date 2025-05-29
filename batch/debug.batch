@@ -1,0 +1,6 @@
+#!/bin/bash -l
+#SBATCH --qos=math-454
+#SBATCH --account=math-454
+#SBATCH --time=00:05:00
+
+srun ./build/swe

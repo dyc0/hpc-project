@@ -92,24 +92,45 @@ read_2d_array_from_DF5(const std::string &filename,
 
 } // namespace
 
-SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::size_t ny) :
-  nx_(nx), ny_(ny), size_x_(500.0), size_y_(500.0)
+SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::size_t ny, MPI_Comm& cart_comm, int* w_dims) :
+  m_nx_(nx), m_ny_(ny), size_x_(500.0), size_y_(500.0), cart_comm_(cart_comm), c_dims_{w_dims[0], w_dims[1]}
 {
   assert(test_case_id == 1 || test_case_id == 2);
-  if (test_case_id == 1)
-  {
-    this->reflective_ = true;
-    this->init_gaussian();
-  }
-  else if (test_case_id == 2)
-  {
-    this->reflective_ = false;
-    this->init_dummy_tsunami();
-  }
-  else
-  {
-    assert(false);
-  }
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &w_rank_);
+  MPI_Comm_rank(cart_comm_, &c_rank_);
+  MPI_Cart_coords(cart_comm_, c_rank_, 2, c_coords_);
+
+  // Determine the local grid size
+  nx_ = m_nx_ / c_dims_[0];
+  ny_ = m_ny_ / c_dims_[1];
+
+  // Handle the case when the grid size is not divisible by the number of processes
+  if (nx_ * c_dims_[0] != m_nx_ && c_coords_[0] == c_dims_[0] - 1)
+    nx_ += m_nx_ % c_dims_[0];
+  if (ny_ * c_dims_[1] != m_ny_ && c_coords_[1] == c_dims_[1] - 1)
+    ny_ += m_ny_ % c_dims_[1];  
+
+  // If we're not at the boundary, add ghost cells
+  nx_ += (c_coords_[0] != 0) + (c_coords_[0] != (c_dims_[1] - 1));
+  ny_ += (c_coords_[1] != 0) + (c_coords_[1] != (c_dims_[0] - 1));
+
+  // Initialize the start coordinates in the full matrix for the local process.
+  // This does not account for ghost cells, so 
+  m_start_coords();
+
+  // if (test_case_id == 1)
+  // {
+  //   this->reflective_ = true;
+  //   this->init_gaussian();
+  // }
+  // // else if (test_case_id == 2)
+  // // {
+  // //   this->reflective_ = false;
+  // //   this->init_dummy_tsunami();
+  // // }
+  // else
+  //   assert(false);
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -156,16 +177,23 @@ SWESolver::init_gaussian()
   const double x0_1 = size_x_ / 2.0;
   const double y0_1 = 0.75 * size_y_;
 
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
+  const double dx = size_x_ / m_nx_;
+  const double dy = size_y_ / m_ny_;
+
+  // If we are at the first cell, the start coordinates are real coordinates.
+  // Otherwise, start coordinates refer to the first cell in the local grid that
+  // is not a ghost cell, but in initialization we also need to initialize the ghost
+  // cells.
+  size_t start_coord_x = m_start_coords_[0] - (c_coords_[0] != 0);
+  size_t start_coord_y = m_start_coords_[1] - (c_coords_[1] != 0);
 
   for (std::size_t j = 0; j < ny_; ++j)
   {
     for (std::size_t i = 0; i < nx_; ++i)
     {
       // Compute the value at the center of the cell
-      const double x = dx * (static_cast<double>(i) + 0.5);
-      const double y = dy * (static_cast<double>(j) + 0.5);
+      const double x = dx * (static_cast<double>(i + m_start_coords_[0]) + 0.5);
+      const double y = dy * (static_cast<double>(j + m_start_coords_[1]) + 0.5);
       const double gauss_0 = 10.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 1000.0);
       const double gauss_1 = 10.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 1000.0);
 
@@ -508,3 +536,16 @@ SWESolver::update_bcs(const std::vector<double> &h0,
     at(hv, nx_ - 1, j) = at(hv0, nx_ - 2, j);
   }
 };
+
+
+void SWESolver::m_start_coords() {
+  // Calculate (x, y) coordinates of the first matrix entry that 
+  // this process will compute.
+
+  // If we're at zero, we start at 0. If not, we start where the
+  // neighbour stopped.
+  size_t c_dim_x = m_nx_ / c_dims_[0]; 
+  size_t c_dim_y = m_ny_ / c_dims_[1];
+  m_start_coords_[0]  = c_coords_[0] * c_dim_x;
+  m_start_coords_[1] = c_coords_[1] * c_dim_y;
+}

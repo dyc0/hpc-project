@@ -1,4 +1,4 @@
-CXX=g++
+CXX=mpicxx	#g++
 LD=${CXX}
 CXXFLAGS+=-Wall -Wextra -pedantic -std=c++11 -I${HDF5_ROOT}/include # -Werror
 LDFLAGS+=-lm $(CXXFLAGS) -L${HDF5_ROOT}/lib -lhdf5

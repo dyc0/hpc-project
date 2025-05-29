@@ -1,6 +1,11 @@
+#ifndef SWE_HH
+#define SWE_HH
+
 #include <cstddef>
 #include <vector>
 #include <string>
+
+#include <mpi.h>
 
 class SWESolver
 {
@@ -20,7 +25,7 @@ public:
    * @param nx  Number of cells along the x direction.
    * @param ny  Number of cells along the y direction.
    */
-  SWESolver(const int test_case_id, const std::size_t nx, const std::size_t ny);
+  SWESolver(const int test_case_id, const std::size_t nx, const std::size_t ny, MPI_Comm& cart_comm, int* w_dims);
 
   /**
    * @brief Constructor for the SWESolver class.
@@ -86,8 +91,17 @@ private:
    */
   void init_dx_dy();
 
-  std::size_t nx_;
-  std::size_t ny_;
+  std::size_t m_nx_, m_ny_;
+  std::size_t nx_, ny_;
+  MPI_Comm cart_comm_;
+  int w_rank_;
+  int c_rank_, c_coords_[2], c_dims_[2];
+  // Coordinates of top--left corner of the local grid in the full matrix.
+  // This does not account for ghost cells, so 
+  // m_start_coords_[0] -> first real x coordinate
+  // m_start_coords_[1] -> first real y coordinate
+  size_t m_start_coords_[2];
+
   double size_x_;
   double size_y_;
   bool reflective_;
@@ -190,4 +204,15 @@ private:
                   std::vector<double> &h,
                   std::vector<double> &hu,
                   std::vector<double> &hv) const;
+                  
+  
+  // **************************************************************
+  // ********************** MPI SPECIFIC **************************
+  // ************************************************************** 
+  
+  void m_start_coords();
 };
+
+
+
+#endif // SWE_HH
