@@ -7,19 +7,32 @@
 #include <string>
 #include <hdf5.h>
 #include <hdf5_hl.h>
+#include <mpi.h>
 #include <cassert>
 
 XDMFWriter::XDMFWriter(const std::string& filename_prefix,
-                       const std::size_t nx,
-                       const std::size_t ny,
-                       const std::size_t size_x,
-                       const std::size_t size_y,
-                       const std::vector<double>& topography) :
-  filename_prefix_(filename_prefix), nx_(nx), ny_(ny), size_x_(size_x), size_y_(size_y)
+                        const std::size_t nx,
+                        const std::size_t ny,
+                        const std::size_t m_nx,
+                        const std::size_t m_ny,
+                        const std::size_t size_x,
+                        const std::size_t size_y,
+                        const std::size_t m_start_coords[2],
+                        const int c_coords[2],
+                        const int c_dims[2],
+                        const int w_rank,
+                        const std::vector<double>& topography) :
+  filename_prefix_(filename_prefix), 
+  nx_(nx), ny_(ny), m_nx_(m_nx), m_ny_(m_ny), size_x_(size_x), size_y_(size_y),
+  m_start_coords_{m_start_coords[0], m_start_coords[1]}, 
+  c_coords_{c_coords[0], c_coords[1]}, c_dims_{c_dims[0], c_dims[1]},
+  w_rank_(w_rank)
 {
-  this->write_mesh_hdf5();
+  if (w_rank_ == 0){
+    this->write_mesh_hdf5();
+    this->write_root_xdmf();
+  }
   this->write_topography_hdf5(topography);
-  this->write_root_xdmf();
 }
 
 void
@@ -28,7 +41,8 @@ XDMFWriter::add_h(const std::vector<double>& h, const double t)
   assert(h.size() == nx_ * ny_);
   time_steps_.push_back(t);
 
-  this->write_root_xdmf();
+  if (w_rank_ == 0)
+    this->write_root_xdmf();
 
   const std::string filename = filename_prefix_ + "_h_" + std::to_string(time_steps_.size() - 1) + ".h5";
 
@@ -112,7 +126,7 @@ XDMFWriter::create_vertices(std::vector<double>& vertices) const
       vertices.push_back(i * dx);
       vertices.push_back(j * dy);
     }
-  }
+    }
 }
 
 void
@@ -187,12 +201,12 @@ XDMFWriter::write_mesh_hdf5() const
 
   // Close the file
   H5Fclose(file_id);
-
+  
   // std::cout << "Mesh HDF5 file created: " << filename + "_mesh.h5" << std::endl;
 }
 
 void
-XDMFWriter::write_topography_hdf5(const std::vector<double>& topography) const
+XDMFWriter::write_topography_hdf5(const std::vector<double>& topography)
 {
   const std::string filename = filename_prefix_ + "_topography.h5";
   write_array_to_hdf5(filename, "topography", topography);
@@ -203,30 +217,102 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
                                 const std::string& dataset_name,
                                 const std::vector<double>& data)
 {
-  // Create the HDF5 file
-  hid_t file_id = H5Fcreate(filename.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+  // The implementation is based on 
+  // https://github.com/HDFGroup/hdf5/blob/develop/HDF5Examples/C/H5PAR/ph5_hyperslab_by_chunk.c
+
+  hid_t   file_id;                                              // File identifier
+  hid_t   plist_id;                                             // File access property list identifier
+
+  // Set up the HDF5 file access property list for parallel I/O
+  plist_id = H5Pcreate(H5P_FILE_ACCESS);                        // Everyone can access the file
+  H5Pset_fapl_mpio(plist_id, MPI_COMM_WORLD, MPI_INFO_NULL);    // Use MPI for parallel I/O
+  H5Pset_coll_metadata_write(plist_id, true);                   // Enable collective metadata writes
+
+  // Create the HDF5 file, erasing any existing data and using the parallel access property list
+  file_id = H5Fcreate(filename.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, plist_id);
   if (file_id < 0)
   {
     std::cerr << "Error creating HDF5 file: " << filename << std::endl;
     return;
   }
-  // Write data.
-  hsize_t dims[1];
-  dims[0] = data.size();
-  hid_t dataspace_id = H5Screate_simple(1, dims, NULL);
+  H5Pclose(plist_id);
+
+  // We are writing a 1D array
+  hsize_t dimsf[1] = {m_nx_ * m_ny_};                        // Dataset is 1D vector with per-cell data
+  // Chunk doesn't contain ghost cells. It refers to the memory size of the data 
+  // that will be written to the file.
+  hsize_t chunk_dims[1];
+  chunk_dims[0] = (nx_ - (c_coords_[0] != 0) - (c_coords_[0] != (c_dims_[0] - 1))) *
+                  (ny_ - (c_coords_[1] != 0) - (c_coords_[1] != (c_dims_[1] - 1)));
+  hid_t filespace       = H5Screate_simple(1, dimsf, NULL);
+  hid_t memspace        = H5Screate_simple(1, chunk_dims, NULL);
+
+  // Create chunked dataset as a 1D array
+  plist_id = H5Pcreate(H5P_DATASET_CREATE);
+  H5Pset_chunk(plist_id, 1, chunk_dims);
   const std::string dataset_name_ = "/" + dataset_name;
-  hid_t dataset_id =
-    H5Dcreate2(file_id, dataset_name_.c_str(), H5T_IEEE_F64LE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-  if (dataset_id < 0)
+  hid_t dset_id = H5Dcreate(file_id, dataset_name_.c_str(), H5T_IEEE_F64LE, filespace, H5P_DEFAULT, plist_id, H5P_DEFAULT);
+  if (dset_id < 0)
   {
     std::cerr << "Error creating dataset" << std::endl;
-    H5Sclose(dataspace_id);
+    H5Sclose(memspace);
+    H5Sclose(filespace);
     H5Fclose(file_id);
     return;
   }
-  H5Dwrite(dataset_id, H5T_IEEE_F64LE, H5S_ALL, H5S_ALL, H5P_DEFAULT, data.data());
-  H5Dclose(dataset_id);
-  H5Sclose(dataspace_id);
-  // Close the file
+  H5Pclose(plist_id);
+  H5Sclose(filespace);
+
+  // Select hyperslab in the file space
+  hsize_t offset[1], stride[1], count[1], block[1];
+  // Offset is how many cells we skip going left and down
+  offset[0] = m_start_coords_[1]*m_nx_ + m_start_coords_[0];
+  // Stride is just the number of cells along the x-dimension
+  stride[0] = m_nx_;
+  // In the next two lines we need to ignore the ghost cells
+  // Count is number of rows in the current submesh
+  count[0] = ny_ - (c_coords_[1] != 0) - (c_coords_[1] != (c_dims_[1] - 1));
+  // Block is the number of cells in the current submesh
+  block[0] = nx_ - (c_coords_[0] != 0) - (c_coords_[0] != (c_dims_[0] - 1));
+
+  
+  filespace       = H5Dget_space(dset_id);
+  hid_t status    = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, stride, count, block);
+  
+  prepare_write_buffer(data);
+  
+  plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
+
+  status = H5Dwrite(dset_id, H5T_IEEE_F64LE, memspace, filespace, plist_id, write_buffer_.data());
+  if (status < 0)
+  {
+    std::cerr << "Error writing data to dataset: " << dataset_name << std::endl;
+  }
+
+  // Close resources
+  H5Dclose(dset_id);
+  H5Sclose(filespace);
+  H5Sclose(memspace);
+  H5Pclose(plist_id);
   H5Fclose(file_id);
+}
+
+
+void XDMFWriter::prepare_write_buffer(const std::vector<double>& data) {
+  // @brief We need to remove ghost cells and arrange the data into a 
+  // contiguous 1D array for writing to HDF5.
+
+  // If we're at the first cell, there are no ghosts to skip
+  size_t start_x  = c_coords_[0] != 0;
+  size_t start_y  = c_coords_[1] != 0;
+  // If we're at the last cell, there are no ghosts at the end
+  size_t end_x    = c_coords_[0] != (c_dims_[0] - 1);
+  size_t end_y    = c_coords_[1] != (c_dims_[1] - 1);
+  
+  write_buffer_.clear();
+  write_buffer_.reserve((nx_ - start_x - end_x) * (ny_ - start_y - end_y));
+  for (size_t j = start_y; j < ny_ - end_y; ++j)
+    for (size_t i = start_x; i < nx_ - end_x; ++i)
+        write_buffer_.push_back(data[j * nx_ + i]);
 }

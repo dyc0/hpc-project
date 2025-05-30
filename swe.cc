@@ -111,6 +111,9 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   if (ny_ * c_dims_[1] != m_ny_ && c_coords_[1] == c_dims_[1] - 1)
     ny_ += m_ny_ % c_dims_[1];  
 
+  nx_real_ = nx_;
+  ny_real_ = ny_;
+  
   // If we're not at the boundary, add ghost cells
   nx_ += (c_coords_[0] != 0) + (c_coords_[0] != (c_dims_[1] - 1));
   ny_ += (c_coords_[1] != 0) + (c_coords_[1] != (c_dims_[0] - 1));
@@ -119,18 +122,35 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   // This does not account for ghost cells, so 
   m_start_coords();
 
-  // if (test_case_id == 1)
-  // {
-  //   this->reflective_ = true;
-  //   this->init_gaussian();
-  // }
+  if (test_case_id == 1)
+  {
+    this->reflective_ = true;
+    this->init_gaussian();
+  }
   // // else if (test_case_id == 2)
   // // {
   // //   this->reflective_ = false;
   // //   this->init_dummy_tsunami();
   // // }
-  // else
-  //   assert(false);
+  else
+    assert(false);
+
+  std::shared_ptr<XDMFWriter> writer;
+  writer = std::make_shared<XDMFWriter>(
+    "water_drops", 
+    this->nx_, 
+    this->ny_, 
+    this->m_nx_,
+    this->m_ny_,
+    this->size_x_, 
+    this->size_y_, 
+    this->m_start_coords_,
+    this->c_coords_,
+    this->c_dims_,
+    this->w_rank_,
+    this->z_);
+
+  // writer->add_h(h0_, 0.0);
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -304,16 +324,15 @@ SWESolver::init_dx_dy()
   zdx_.resize(this->z_.size(), 0.0);
   zdy_.resize(this->z_.size(), 0.0);
 
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
+  const double dx = size_x_ / m_nx_;
+  const double dy = size_y_ / m_ny_;
+  // The derivatives don't exist at the boundaries nor at ghost cells.
   for (std::size_t j = 1; j < ny_ - 1; ++j)
-  {
     for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
       at(this->zdx_, i, j) = 0.5 * (at(this->z_, i + 1, j) - at(this->z_, i - 1, j)) / dx;
       at(this->zdy_, i, j) = 0.5 * (at(this->z_, i, j + 1) - at(this->z_, i, j - 1)) / dy;
     }
-  }
 }
 
 void
@@ -322,7 +341,20 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   std::shared_ptr<XDMFWriter> writer;
   if (output_n > 0)
   {
-    writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
+    writer = std::make_shared<XDMFWriter>(
+    "water_drops", 
+    this->nx_, 
+    this->ny_, 
+    this->m_nx_,
+    this->m_ny_,
+    this->size_x_, 
+    this->size_y_, 
+    this->m_start_coords_,
+    this->c_coords_,
+    this->c_dims_,
+    this->w_rank_,
+    this->z_);
+    // writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
     writer->add_h(h0_, 0.0);
   }
 

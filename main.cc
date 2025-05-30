@@ -21,8 +21,8 @@ main(int argc, char ** argv)
   // ********************** SIMULATION PARAMETERS *****************
   // **************************************************************
   const double Tend = 1.0;     // Simulation time in hours
-  const std::size_t nx = 62; // Number of cells per direction.
-  const std::size_t ny = 62; // Number of cells per direction.
+  const std::size_t nx = 32; // Number of cells per direction.
+  const std::size_t ny = 32; // Number of cells per direction.
   const std::size_t output_n = 20; // For profiling, I use 0
                                   // TODO: Come back to this and profile IO
 

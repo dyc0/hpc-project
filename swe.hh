@@ -93,6 +93,7 @@ private:
 
   std::size_t m_nx_, m_ny_;
   std::size_t nx_, ny_;
+  std::size_t nx_real_, ny_real_;
   MPI_Comm cart_comm_;
   int w_rank_;
   int c_rank_, c_coords_[2], c_dims_[2];
