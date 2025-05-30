@@ -116,12 +116,12 @@ void
 XDMFWriter::create_vertices(std::vector<double>& vertices) const
 {
   vertices.clear();
-  vertices.reserve((nx_ + 1) * (ny_ + 1) * 2);
-  const double dx = static_cast<double>(size_x_) / nx_;
-  const double dy = static_cast<double>(size_y_) / ny_;
-  for (std::size_t j = 0; j <= ny_; ++j)
+  vertices.reserve((m_nx_ + 1) * (m_ny_ + 1) * 2);
+  const double dx = static_cast<double>(size_x_) / m_nx_;
+  const double dy = static_cast<double>(size_y_) / m_ny_;
+  for (std::size_t j = 0; j <= m_ny_; ++j)
   {
-    for (std::size_t i = 0; i <= nx_; ++i)
+    for (std::size_t i = 0; i <= m_nx_; ++i)
     {
       vertices.push_back(i * dx);
       vertices.push_back(j * dy);
@@ -133,15 +133,15 @@ void
 XDMFWriter::create_cells(std::vector<int>& cells) const
 {
   cells.clear();
-  cells.reserve(nx_ * ny_ * 4);
-  for (std::size_t j = 0; j < ny_; ++j)
+  cells.reserve(m_nx_ * m_ny_ * 4);
+  for (std::size_t j = 0; j < m_ny_; ++j)
   {
-    for (std::size_t i = 0; i < nx_; ++i)
+    for (std::size_t i = 0; i < m_nx_; ++i)
     {
-      cells.push_back(j * (nx_ + 1) + i);
-      cells.push_back(j * (nx_ + 1) + i + 1);
-      cells.push_back((j + 1) * (nx_ + 1) + i + 1);
-      cells.push_back((j + 1) * (nx_ + 1) + i);
+      cells.push_back(j * (m_nx_ + 1) + i);
+      cells.push_back(j * (m_nx_ + 1) + i + 1);
+      cells.push_back((j + 1) * (m_nx_ + 1) + i + 1);
+      cells.push_back((j + 1) * (m_nx_ + 1) + i);
     }
   }
 }

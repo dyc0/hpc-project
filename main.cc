@@ -51,21 +51,16 @@ main(int argc, char ** argv)
   const bool full_log = false;
 
   SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
-  // solver.solve(Tend, full_log, output_n, output_fname);
+  solver.solve(Tend, full_log, output_n, output_fname);
   
-  MPI_Comm_free(&cart_comm);
-  MPI_Finalize();
+
 
   // // Option 2 - Solving analytical (dummy) tsunami example.
   // const int test_case_id = 2;  // Analytical tsunami test case
-  // const double Tend = 1.0;     // Simulation time in hours
-  // const std::size_t nx = 1000; // Number of cells per direction.
-  // const std::size_t ny = 1000; // Number of cells per direction.
-  // const std::size_t output_n = 0; // For profiling, I use 0
   // const std::string output_fname = "analytical_tsunami";
   // const bool full_log = false;
 
-  // SWESolver solver(test_case_id, nx, ny);
+  // SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
   // solver.solve(Tend, full_log, output_n, output_fname);
 
   // // Option 3 - Solving tsunami problem with data loaded from file.
@@ -84,6 +79,9 @@ main(int argc, char ** argv)
 
   // SWESolver solver(fname, size, size);
   // solver.solve(Tend, full_log, output_n, output_fname);
+
+  MPI_Comm_free(&cart_comm);
+  MPI_Finalize();
 
   return 0;
 }

@@ -134,23 +134,6 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   // // }
   else
     assert(false);
-
-  std::shared_ptr<XDMFWriter> writer;
-  writer = std::make_shared<XDMFWriter>(
-    "water_drops", 
-    this->nx_, 
-    this->ny_, 
-    this->m_nx_,
-    this->m_ny_,
-    this->size_x_, 
-    this->size_y_, 
-    this->m_start_coords_,
-    this->c_coords_,
-    this->c_dims_,
-    this->w_rank_,
-    this->z_);
-
-  // writer->add_h(h0_, 0.0);
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -212,8 +195,8 @@ SWESolver::init_gaussian()
     for (std::size_t i = 0; i < nx_; ++i)
     {
       // Compute the value at the center of the cell
-      const double x = dx * (static_cast<double>(i + m_start_coords_[0]) + 0.5);
-      const double y = dy * (static_cast<double>(j + m_start_coords_[1]) + 0.5);
+      const double x = dx * (static_cast<double>(i + start_coord_x) + 0.5);
+      const double y = dy * (static_cast<double>(j + start_coord_y) + 0.5);
       const double gauss_0 = 10.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 1000.0);
       const double gauss_1 = 10.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 1000.0);
 
@@ -357,7 +340,7 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     // writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
     writer->add_h(h0_, 0.0);
   }
-
+  return;
   double T = 0.0;
 
   std::vector<double> &h = h1_;
