@@ -48,7 +48,7 @@ main(int argc, char ** argv)
   // Option 1 - Solving simple problem: water drops in a box
   const int test_case_id = 1;  // Water drops in a box
   const std::string output_fname = "water_drops";
-  const bool full_log = false;
+  const bool full_log = true;
 
   SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
   solver.solve(Tend, full_log, output_n, output_fname);

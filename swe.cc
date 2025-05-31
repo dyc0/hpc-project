@@ -214,6 +214,7 @@ SWESolver::init_gaussian()
 void
 SWESolver::init_dummy_tsunami()
 {
+  // TODO
   hu0_.resize(nx_ * ny_);
   hv0_.resize(nx_ * ny_);
   std::fill(hu0_.begin(), hu0_.end(), 0.0);
@@ -263,6 +264,7 @@ SWESolver::init_dummy_tsunami()
 void
 SWESolver::init_dummy_slope()
 {
+  // TODO
   hu0_.resize(nx_ * ny_);
   hv0_.resize(nx_ * ny_);
   std::fill(hu0_.begin(), hu0_.end(), 0.0);
@@ -326,21 +328,14 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   {
     writer = std::make_shared<XDMFWriter>(
     "water_drops", 
-    this->nx_, 
-    this->ny_, 
-    this->m_nx_,
-    this->m_ny_,
-    this->size_x_, 
-    this->size_y_, 
+    this->nx_, this->ny_, this->m_nx_, this->m_ny_,
+    this->size_x_, this->size_y_, 
     this->m_start_coords_,
-    this->c_coords_,
-    this->c_dims_,
+    this->c_coords_, this->c_dims_,
     this->w_rank_,
     this->z_);
-    // writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
     writer->add_h(h0_, 0.0);
   }
-  return;
   double T = 0.0;
 
   std::vector<double> &h = h1_;
@@ -362,6 +357,8 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
 
     printf("Computing T: %2.4f hr  (dt = %.2e s) -- %3.3f%%", T1, dt * 3600, 100 * T1 / Tend);
     std::cout << (full_log ? "\n" : "\r") << std::flush;
+
+    return;
 
     this->update_bcs(h0, hu0, hv0, h, hu, hv);
 
@@ -407,9 +404,9 @@ SWESolver::compute_time_step(const std::vector<double> &h,
   double max_nu_sqr = 0.0;
   double au{0.0};
   double av{0.0};
-  // Potential spot for optimization
+  // We are not interested in the ghost cells, nor in the boundaries.
+  // These calculations are completely local.
   for (std::size_t j = 1; j < ny_ - 1; ++j)
-  {
     for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
       au = std::max(au, std::fabs(at(hu, i, j)));
@@ -418,12 +415,19 @@ SWESolver::compute_time_step(const std::vector<double> &h,
       const double nu_v = std::fabs(at(hv, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
       max_nu_sqr = std::max(max_nu_sqr, nu_u * nu_u + nu_v * nu_v);
     }
-  }
 
   const double dx = size_x_ / nx_;
   const double dy = size_y_ / ny_;
   double dt = std::min(dx, dy) / (sqrt(2.0 * max_nu_sqr));
-  return std::min(dt, Tend - T);
+  dt = std::min(dt, Tend - T);
+
+  // Synchronize the time step across all processes. Doing this rather
+  // than synchronizing max_nu_sqr keeps the time step consistent
+  // across all processes, so I think it's more resilient to
+  // numerical errors.
+  double dt_max;
+  MPI_Allreduce(&dt, &dt_max, 1, MPI_DOUBLE, MPI_MIN, cart_comm_);
+  return dt_max;
 }
 
 void
@@ -523,6 +527,8 @@ SWESolver::update_bcs(const std::vector<double> &h0,
                       std::vector<double> &hu,
                       std::vector<double> &hv) const
 {
+  // TODO: Boundary conditions need to be only in boundary cells, not in ghost cells.
+  
   const double coef = this->reflective_ ? -1.0 : 1.0;
 
   // Top and bottom boundaries.
