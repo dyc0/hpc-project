@@ -242,7 +242,7 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   // Chunk doesn't contain ghost cells. It refers to the memory size of the data 
   // that will be written to the file.
   hsize_t chunk_dims[1];
-  chunk_dims[0] = (nx_ -2) * (ny_ - 2);
+  chunk_dims[0] = (nx_ - 2) * (ny_ - 2);
   hid_t filespace       = H5Screate_simple(1, dimsf, NULL);
   hid_t memspace        = H5Screate_simple(1, chunk_dims, NULL);
 

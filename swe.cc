@@ -147,13 +147,18 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
     this->reflective_ = true;
     this->init_gaussian();
   }
-  // // else if (test_case_id == 2)
-  // // {
-  // //   this->reflective_ = false;
-  // //   this->init_dummy_tsunami();
-  // // }
+  else if (test_case_id == 2)
+  {
+    this->reflective_ = false;
+    this->init_dummy_tsunami();
+  }
   else
     assert(false);
+
+  std::cout << "Process " << c_rank_ << " initialized with grid size: "
+            << nx_ << "x" << ny_ << ", start coords: (" 
+            << m_start_coords_[0] << ", " << m_start_coords_[1] << ")" 
+            << std::endl;
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -218,8 +223,8 @@ SWESolver::init_gaussian()
     for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
       // Compute the value at the center of the cell
-      const double x = dx * (static_cast<double>(i + m_start_coords_[0]) + 0.5);
-      const double y = dy * (static_cast<double>(j + m_start_coords_[1]) + 0.5);
+      const double x = dx * (static_cast<double>(i + m_start_coords_[0] - 1) + 0.5);
+      const double y = dy * (static_cast<double>(j + m_start_coords_[1] - 1) + 0.5);
       const double gauss_0 = 10.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 1000.0);
       const double gauss_1 = 10.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 1000.0);
 
@@ -239,8 +244,8 @@ SWESolver::init_gaussian()
   // Synchronize ghost cells across z-buffer. The rest of them are
   // synchronized in solve function.
   send_recv(z_, Buffer::Z);
-  MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE)
-  MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE)
+  MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
+  MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
 
   this->init_dx_dy();
 }
@@ -461,8 +466,14 @@ SWESolver::compute_time_step(const std::vector<double> &h,
   double nu_u = 0, nu_v = 0;
   // We are not interested in the ghost cells, nor in the boundaries.
   // These calculations are completely local.
-  for (std::size_t j = 1; j < ny_ - 1; ++j)
-    for (std::size_t i = 1; i < nx_ - 1; ++i)
+  std::size_t j_start = c_coords_[1] == 0 ? 2 : 1;
+  std::size_t j_end = c_coords_[1] == c_dims_[1] - 1 ? ny_ - 2 : ny_ - 1;
+  std::size_t i_start = c_coords_[0] == 0 ? 2 : 1;
+  std::size_t i_end = c_coords_[0] == c_dims_[0] - 1 ? nx_ - 2 : nx_ - 1;
+
+
+  for (std::size_t j = j_start; j < j_end; ++j)
+    for (std::size_t i = i_start; i < i_end; ++i)
     {
       nu_u = std::fabs(at(hu, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
       nu_v = std::fabs(at(hv, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
@@ -494,8 +505,8 @@ SWESolver::compute_kernel(const std::size_t i,
                           std::vector<double> &hu,
                           std::vector<double> &hv) const
 {
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
+  const double dx = size_x_ / m_nx_;
+  const double dy = size_y_ / m_ny_;
   const double C1x = 0.5 * dt / dx;
   const double C1y = 0.5 * dt / dy;
   const double C2 = dt * g;
@@ -546,9 +557,15 @@ SWESolver::solve_step(const double dt,
                       std::vector<double> &hu,
                       std::vector<double> &hv) const
 {
-  for (std::size_t j = 1; j < ny_ - 1; ++j)
+  // We don't compute kernel at the boundaries nor at the ghost cells.
+  std::size_t j_start = c_coords_[1] == 0 ? 2 : 1;
+  std::size_t j_end = c_coords_[1] == c_dims_[1] - 1 ? ny_ - 2 : ny_ - 1;
+  std::size_t i_start = c_coords_[0] == 0 ? 2 : 1;
+  std::size_t i_end = c_coords_[0] == c_dims_[0] - 1 ? nx_ - 2 : nx_ - 1;
+
+  for (std::size_t j = j_start; j < j_end; ++j)
   {
-    for (std::size_t i = 1; i < nx_ - 1; ++i)
+    for (std::size_t i = i_start; i < i_end; ++i)
     {
       this->compute_kernel(i, j, dt, h0, hu0, hv0, h, hu, hv);
     }
@@ -564,6 +581,7 @@ SWESolver::update_bcs(const std::vector<double> &h0,
                       std::vector<double> &hv) const
 {
   // Boundary conditions are applied only to the boundary submeshes.
+  // They too have ghost cells.
   
   const double coef = this->reflective_ ? -1.0 : 1.0;
 
@@ -571,34 +589,34 @@ SWESolver::update_bcs(const std::vector<double> &h0,
   if (c_coords_[1] == 0)
     for (std::size_t i = 0; i < nx_; ++i)
     {
-      at(h, i, 0) = at(h0, i, 1);
-      at(hu, i, 0) = at(hu0, i, 1);
-      at(hv, i, 0) = coef * at(hv0, i, 1);
+      at(h, i, 1) = at(h0, i, 2);
+      at(hu, i, 1) = at(hu0, i, 2);
+      at(hv, i, 1) = coef * at(hv0, i, 2);
     }
   // Bottom boundary
   else if (c_coords_[1] == c_dims_[1] - 1)
     for (std::size_t i = 0; i < nx_; ++i)
     {
-      at(h, i, ny_ - 1) = at(h0, i, ny_ - 2);
-      at(hu, i, ny_ - 1) = at(hu0, i, ny_ - 2);
-      at(hv, i, ny_ - 1) = coef * at(hv0, i, ny_ - 2);
+      at(h, i, ny_ - 2) = at(h0, i, ny_ - 3);
+      at(hu, i, ny_ - 2) = at(hu0, i, ny_ - 3);
+      at(hv, i, ny_ - 2) = coef * at(hv0, i, ny_ - 3);
     }
 
   // Left boundary.
   if (c_coords_[0] == 0)
     for (std::size_t j = 0; j < ny_; ++j)
     {
-      at(h, 0, j) = at(h0, 1, j);
-      at(hu, 0, j) = coef * at(hu0, 1, j);
-      at(hv, 0, j) = at(hv0, 1, j);
+      at(h, 1, j) = at(h0, 2, j);
+      at(hu, 1, j) = coef * at(hu0, 2, j);
+      at(hv, 1, j) = at(hv0, 2, j);
     }
   // Right boundary.
   else if (c_coords_[0] == c_dims_[0] - 1)
     for (std::size_t j = 0; j < ny_; ++j)
     {
-      at(h, nx_ - 1, j) = at(h0, nx_ - 2, j);
-      at(hu, nx_ - 1, j) = coef * at(hu0, nx_ - 2, j);
-      at(hv, nx_ - 1, j) = at(hv0, nx_ - 2, j);
+      at(h, nx_ - 2, j) = at(h0, nx_ - 3, j);
+      at(hu, nx_ - 2, j) = coef * at(hu0, nx_ - 3, j);
+      at(hv, nx_ - 2, j) = at(hv0, nx_ - 3, j);
     }
 };
 

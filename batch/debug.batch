@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #SBATCH --qos=math-454
 #SBATCH --account=math-454
-#SBATCH --time=00:00:30
+#SBATCH --time=00:30:30
 
-srun ./build/swe 64 64 20 parallel_tests
+srun ./build/swe 1000 1000 20 parallel_tests
