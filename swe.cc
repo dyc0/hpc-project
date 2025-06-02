@@ -112,17 +112,35 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
     nx_ += m_nx_ % c_dims_[0];
   if (ny_ * c_dims_[1] != m_ny_ && c_coords_[1] == c_dims_[1] - 1)
     ny_ += m_ny_ % c_dims_[1];  
-
-  nx_real_ = nx_;
-  ny_real_ = ny_;
   
-  // If we're not at the boundary, add ghost cells
-  nx_ += (c_coords_[0] != 0) + (c_coords_[0] != (c_dims_[0] - 1));
-  ny_ += (c_coords_[1] != 0) + (c_coords_[1] != (c_dims_[1] - 1));
+  // Add ghost cells
+  nx_ += 2;
+  ny_ += 2;
 
   // Initialize the start coordinates in the full matrix for the local process.
   // This does not account for ghost cells, so 
   m_start_coords();
+
+  // Prepare datatype for column communication. We don't want to send
+  // the ghost cells, so we only send the real cells in the column.
+  MPI_Type_vector(ny_ - 2, 1, nx_, MPI_DOUBLE, &column_type_);
+  MPI_Type_commit(&column_type_);
+  // Neighbours in the cartesian grid
+  MPI_Cart_shift(cart_comm_, 0, 1, 
+    &neighbours_[Direction::LEFT], 
+    &neighbours_[Direction::RIGHT]);   // Shift in columns
+  MPI_Cart_shift(cart_comm_, 1, 1, 
+    &neighbours_[Direction::UP], 
+    &neighbours_[Direction::DOWN]);    // Shift in rows
+
+  // Initialize the communication requests
+  for (int i = 0; i < 4; ++i)   // buffers
+    for (int j = 0; j < 4; ++j) // directions
+    {
+      send_requests_[i][j] = MPI_REQUEST_NULL;
+      recv_requests_[i][j] = MPI_REQUEST_NULL;
+    }
+
 
   if (test_case_id == 1)
   {
@@ -136,29 +154,6 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   // // }
   else
     assert(false);
-
-  // Prepare datatype for column communication. We don't want to send
-  // the ghost cells, so we only send the real cells in the column.
-  MPI_Type_vector(ny_real_, 1, nx_, MPI_DOUBLE, &column_type_);
-  MPI_Type_commit(&column_type_);
-  // Neighbours in the cartesian grid
-  // NOTE: MPI_Cart_shift returns the rank of the neighbour in MPI_COMM_WORLD.
-  // TODO: Is this correct? I checked, and ids in MPI_COMM_WORLD and cart_comm_
-  // are the same, so it doesn't seem to matter here...
-  MPI_Cart_shift(cart_comm_, 0, 1, 
-    &neighbours_[Direction::LEFT], 
-    &neighbours_[Direction::RIGHT]);   // Shift in columns
-  MPI_Cart_shift(cart_comm_, 1, 1, 
-    &neighbours_[Direction::UP], 
-    &neighbours_[Direction::DOWN]);    // Shift in rows
-
-  // Initialize the communication requests
-  for (int i = 0; i < 3; ++i)
-    for (int j = 0; j < 4; ++j)
-    {
-      send_requests_[i][j] = MPI_REQUEST_NULL;
-      recv_requests_[i][j] = MPI_REQUEST_NULL;
-    }
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -212,26 +207,40 @@ SWESolver::init_gaussian()
   // Otherwise, start coordinates refer to the first cell in the local grid that
   // is not a ghost cell, but in initialization we also need to initialize the ghost
   // cells.
-  size_t start_coord_x = m_start_coords_[0] - (c_coords_[0] != 0);
-  size_t start_coord_y = m_start_coords_[1] - (c_coords_[1] != 0);
 
-  for (std::size_t j = 0; j < ny_; ++j)
+  // Fill top ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i)
+    h0_.push_back(0.0);
+  for (std::size_t j = 1; j < ny_ - 1; ++j)
   {
-    for (std::size_t i = 0; i < nx_; ++i)
+    // Add left ghost cell
+    h0_.push_back(0.0);
+    for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
       // Compute the value at the center of the cell
-      const double x = dx * (static_cast<double>(i + start_coord_x) + 0.5);
-      const double y = dy * (static_cast<double>(j + start_coord_y) + 0.5);
+      const double x = dx * (static_cast<double>(i + m_start_coords_[0]) + 0.5);
+      const double y = dy * (static_cast<double>(j + m_start_coords_[1]) + 0.5);
       const double gauss_0 = 10.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 1000.0);
       const double gauss_1 = 10.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 1000.0);
 
       h0_.push_back(10.0 + gauss_0 + gauss_1);
     }
+    // Add right ghost cell
+    h0_.push_back(0.0);
   }
+  // Fill bottom ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i)
+    h0_.push_back(0.0);
 
   // This is the floor topography
   z_.resize(this->h0_.size());
   std::fill(z_.begin(), z_.end(), 0.0);
+
+  // Synchronize ghost cells across z-buffer. The rest of them are
+  // synchronized in solve function.
+  send_recv(z_, Buffer::Z);
+  MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE)
+  MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE)
 
   this->init_dx_dy();
 }
@@ -331,6 +340,7 @@ SWESolver::init_dummy_slope()
 void
 SWESolver::init_dx_dy()
 {
+  // TODO
   zdx_.resize(this->z_.size(), 0.0);
   zdy_.resize(this->z_.size(), 0.0);
 
@@ -382,6 +392,11 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     // in every loop. If copying is to the order of ns and comm initialization
     // us, this might give better results. TODO if I have time.
 
+    // Start send and receive for all buffers
+    this->send_recv(h0_, Buffer::H);
+    this->send_recv(hu0_, Buffer::HU);
+    this->send_recv(hv0_, Buffer::HV);
+
     // Wait for h sends to finish, because we need to read h in compute_time_step.
     MPI_Waitall(4, send_requests_[Buffer::H],  MPI_STATUSES_IGNORE);
     MPI_Waitall(4, send_requests_[Buffer::HU], MPI_STATUSES_IGNORE);
@@ -415,11 +430,6 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     std::swap(h, h0);
     std::swap(hu, hu0);
     std::swap(hv, hv0);
-    
-    // Start send and receive for all buffers
-    this->send_recv(h0_, Buffer::H);
-    this->send_recv(hu0_, Buffer::HU);
-    this->send_recv(hv0_, Buffer::HV);
 
     T = T1;
   }
@@ -609,9 +619,6 @@ void SWESolver::m_start_coords() {
 void SWESolver::send_recv(std::vector<double>& buffer,
                           const int which_buffer) 
 {
-  // We don't send boundary cells nor ghost cells. Boundary has local
-  // calculations. See update_bcs.
-
   // We need different tags for each buffer, so we use the digit in
   // place of thousands for that. This allows for 999 MPI processes. 
   int tag_factor = 1000 * (which_buffer + 1);
@@ -648,26 +655,26 @@ void SWESolver::send_recv(std::vector<double>& buffer,
 
   // Up
   MPI_Isend(&at(buffer, 1, 1),
-            nx_real_, MPI_DOUBLE,
+            nx_ - 2, MPI_DOUBLE,
             neighbours_[Direction::UP],
             w_rank_ + tag_factor,
             cart_comm_,
             &send_requests_[which_buffer][Direction::UP]);
   MPI_Irecv(&at(buffer, 1, 0),
-            nx_real_, MPI_DOUBLE,
+            nx_ - 2, MPI_DOUBLE,
             neighbours_[Direction::UP],
             neighbours_[Direction::UP] >= 0 ? neighbours_[Direction::UP] + tag_factor : MPI_ANY_TAG,
             cart_comm_,
             &recv_requests_[which_buffer][Direction::UP]);
   // Down
   MPI_Isend(&at(buffer, 1, ny_ - 2),
-            nx_real_, MPI_DOUBLE,
+            nx_ - 2, MPI_DOUBLE,
             neighbours_[Direction::DOWN],
             w_rank_ + tag_factor,
             cart_comm_,
             &send_requests_[which_buffer][Direction::DOWN]);
   MPI_Irecv(&at(buffer, 1, ny_ - 1),
-            nx_real_, MPI_DOUBLE,
+            nx_ - 2, MPI_DOUBLE,
             neighbours_[Direction::DOWN],
             neighbours_[Direction::DOWN] >= 0 ? neighbours_[Direction::DOWN] + tag_factor : MPI_ANY_TAG,
             cart_comm_,

@@ -19,7 +19,8 @@ enum Buffer
 {
   H = 0,
   HU = 1,
-  HV = 2
+  HV = 2,
+  Z  = 3
 };
 
 
@@ -122,8 +123,8 @@ private:
   MPI_Datatype column_type_;
   // Neighbours in the cartesian grid
   int neighbours_[4]; // right, bottom, left, up
-  MPI_Request send_requests_[3][4];
-  MPI_Request recv_requests_[3][4];
+  MPI_Request send_requests_[4][4];
+  MPI_Request recv_requests_[4][4];
 
   double size_x_;
   double size_y_;

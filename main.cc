@@ -15,9 +15,9 @@ main(int argc, char ** argv)
 {
   MPI_Init(&argc, &argv);
 
-  if (argc != 4) {
+  if (argc != 5) {
         if (MPI_COMM_WORLD == MPI_COMM_NULL) MPI_Abort(MPI_COMM_WORLD, 1);
-        fprintf(stderr, "Usage: %s <size1> <size2> <n_out>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <size1> <size2> <n_out> <filepath>\n", argv[0]);
         MPI_Finalize();
         return 1;
     }
@@ -54,7 +54,7 @@ main(int argc, char ** argv)
   // Uncomment the option you want to run.
   // Option 1 - Solving simple problem: water drops in a box
   const int test_case_id = 1;  // Water drops in a box
-  const std::string output_fname = "parallel_tests/water_drops";
+  const std::string output_fname = std::string(argv[4]) + "/water_drops";
   const bool full_log = true;
 
   SWESolver solver(test_case_id, nx, ny, cart_comm, dims);

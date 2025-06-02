@@ -242,8 +242,7 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   // Chunk doesn't contain ghost cells. It refers to the memory size of the data 
   // that will be written to the file.
   hsize_t chunk_dims[1];
-  chunk_dims[0] = (nx_ - (c_coords_[0] != 0) - (c_coords_[0] != (c_dims_[0] - 1))) *
-                  (ny_ - (c_coords_[1] != 0) - (c_coords_[1] != (c_dims_[1] - 1)));
+  chunk_dims[0] = (nx_ -2) * (ny_ - 2);
   hid_t filespace       = H5Screate_simple(1, dimsf, NULL);
   hid_t memspace        = H5Screate_simple(1, chunk_dims, NULL);
 
@@ -271,9 +270,9 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   stride[0] = m_nx_;
   // In the next two lines we need to ignore the ghost cells
   // Count is number of rows in the current submesh
-  count[0] = ny_ - (c_coords_[1] != 0) - (c_coords_[1] != (c_dims_[1] - 1));
+  count[0] = ny_ - 2;
   // Block is the number of cells in the current submesh
-  block[0] = nx_ - (c_coords_[0] != 0) - (c_coords_[0] != (c_dims_[0] - 1));
+  block[0] = nx_ - 2;
 
   
   filespace       = H5Dget_space(dset_id);
@@ -302,17 +301,10 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
 void XDMFWriter::prepare_write_buffer(const std::vector<double>& data) {
   // @brief We need to remove ghost cells and arrange the data into a 
   // contiguous 1D array for writing to HDF5.
-
-  // If we're at the first cell, there are no ghosts to skip
-  size_t start_x  = c_coords_[0] != 0;
-  size_t start_y  = c_coords_[1] != 0;
-  // If we're at the last cell, there are no ghosts at the end
-  size_t end_x    = c_coords_[0] != (c_dims_[0] - 1);
-  size_t end_y    = c_coords_[1] != (c_dims_[1] - 1);
   
   write_buffer_.clear();
-  write_buffer_.reserve((nx_ - start_x - end_x) * (ny_ - start_y - end_y));
-  for (size_t j = start_y; j < ny_ - end_y; ++j)
-    for (size_t i = start_x; i < nx_ - end_x; ++i)
+  write_buffer_.reserve((nx_ - 2) * (ny_ - 2));
+  for (size_t j = 1; j < ny_ - 1; ++j)
+    for (size_t i = 1; i < nx_ - 1; ++i)
         write_buffer_.push_back(data[j * nx_ + i]);
 }

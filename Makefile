@@ -44,3 +44,4 @@ clean_otput:
 	rm -f slurm-*.out
 	rm -f gmon.out
 	rm -rf water_drops*
+	rm -rf parallel_tests/*
