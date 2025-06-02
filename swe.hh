@@ -7,6 +7,22 @@
 
 #include <mpi.h>
 
+enum Direction
+{
+  RIGHT = 0,
+  DOWN = 1,
+  LEFT = 2,
+  UP = 3
+};
+
+enum Buffer
+{
+  H = 0,
+  HU = 1,
+  HV = 2
+};
+
+
 class SWESolver
 {
 public:
@@ -102,6 +118,12 @@ private:
   // m_start_coords_[0] -> first real x coordinate
   // m_start_coords_[1] -> first real y coordinate
   size_t m_start_coords_[2];
+  // MPI datatype for column communication
+  MPI_Datatype column_type_;
+  // Neighbours in the cartesian grid
+  int neighbours_[4]; // right, bottom, left, up
+  MPI_Request send_requests_[3][4];
+  MPI_Request recv_requests_[3][4];
 
   double size_x_;
   double size_y_;
@@ -212,6 +234,13 @@ private:
   // ************************************************************** 
   
   void m_start_coords();
+
+  void init_persistent_comms(std::vector<double>& buffer,
+                             const int which_buffer);
+
+
+  void send_recv(std::vector<double>& buffer,
+                  const int which_buffer);
 };
 
 

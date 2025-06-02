@@ -43,3 +43,4 @@ clean_otput:
 	rm -f perf.data
 	rm -f slurm-*.out
 	rm -f gmon.out
+	rm -rf water_drops*
