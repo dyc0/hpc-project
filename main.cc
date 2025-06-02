@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 
 #include <mpi.h>
@@ -14,6 +15,13 @@ main(int argc, char ** argv)
 {
   MPI_Init(&argc, &argv);
 
+  if (argc != 4) {
+        if (MPI_COMM_WORLD == MPI_COMM_NULL) MPI_Abort(MPI_COMM_WORLD, 1);
+        fprintf(stderr, "Usage: %s <size1> <size2> <n_out>\n", argv[0]);
+        MPI_Finalize();
+        return 1;
+    }
+
   int world_size;
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
@@ -21,12 +29,11 @@ main(int argc, char ** argv)
   // ********************** SIMULATION PARAMETERS *****************
   // **************************************************************
   const double Tend = 1.0;     // Simulation time in hours
-  const std::size_t nx = 1000; // Number of cells per direction.
-  const std::size_t ny = 1000; // Number of cells per direction.
-  const std::size_t output_n = 20; // For profiling, I use 0
-                                  // TODO: Come back to this and profile IO
+  const std::size_t nx = std::stoul(argv[1]); // Number of cells per direction.
+  const std::size_t ny = std::stoul(argv[2]);
+  const std::size_t output_n = std::stoul(argv[3]); // For profiling, I use 0
 
-                                  
+  
   // **************************************************************
   // ********************** MPI INITIALIZATION *********************
   // **************************************************************

@@ -3,4 +3,4 @@
 #SBATCH --account=math-454
 #SBATCH --time=00:30:30
 
-srun ./build/swe
+srun ./build/swe 1000 1000 20
