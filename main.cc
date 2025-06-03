@@ -53,22 +53,22 @@ main(int argc, char ** argv)
   // **************************************************************
   // Uncomment the option you want to run.
   // Option 1 - Solving simple problem: water drops in a box
-  const int test_case_id = 1;  // Water drops in a box
-  const std::string output_fname = std::string(argv[4]) + "/water_drops";
-  const bool full_log = true;
+  // const int test_case_id = 1;  // Water drops in a box
+  // const std::string output_fname = std::string(argv[4]) + "/water_drops";
+  // const bool full_log = true;
 
-  SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
-  solver.solve(Tend, full_log, output_n, output_fname);
+  // SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
+  // solver.solve(Tend, full_log, output_n, output_fname);
   
 
 
   // // Option 2 - Solving analytical (dummy) tsunami example.
-  // const int test_case_id = 2;  // Analytical tsunami test case
-  // const std::string output_fname = "analytical_tsunami";
-  // const bool full_log = false;
+  const int test_case_id = 2;  // Analytical tsunami test case
+  const std::string output_fname = std::string(argv[4]) + "/analytical_tsunami";
+  const bool full_log = false;
 
-  // SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
-  // solver.solve(Tend, full_log, output_n, output_fname);
+  SWESolver solver(test_case_id, nx, ny, cart_comm, dims);
+  solver.solve(Tend, full_log, output_n, output_fname);
 
   // // Option 3 - Solving tsunami problem with data loaded from file.
   // const double Tend = 0.2;   // Simulation time in hours

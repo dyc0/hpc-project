@@ -125,6 +125,9 @@ private:
   int neighbours_[4]; // right, bottom, left, up
   MPI_Request send_requests_[4][4];
   MPI_Request recv_requests_[4][4];
+  // Some calculations aren't done at the boundaries, so we need to know
+  // where to start and end the loops
+  std::size_t j_start_, j_end_, i_start_, i_end_;
 
   double size_x_;
   double size_y_;

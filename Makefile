@@ -36,12 +36,12 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-clean: clean_otput
+clean: clean_output
 	rm -rf $(BUILD_DIR)
 	
-clean_otput:
+clean_output:
 	rm -f perf.data
 	rm -f slurm-*.out
 	rm -f gmon.out
-	rm -rf water_drops*
 	rm -rf parallel_tests/*
+	rm -rf frames/*

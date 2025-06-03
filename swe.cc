@@ -121,6 +121,12 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   // This does not account for ghost cells, so 
   m_start_coords();
 
+  // Initialize local loop endpoints
+  j_start_ = c_coords_[1] == 0 ? 2 : 1;
+  j_end_ = c_coords_[1] == c_dims_[1] - 1 ? ny_ - 2 : ny_ - 1;
+  i_start_ = c_coords_[0] == 0 ? 2 : 1;
+  i_end_ = c_coords_[0] == c_dims_[0] - 1 ? nx_ - 2 : nx_ - 1;
+
   // Prepare datatype for column communication. We don't want to send
   // the ghost cells, so we only send the real cells in the column.
   MPI_Type_vector(ny_ - 2, 1, nx_, MPI_DOUBLE, &column_type_);
@@ -141,7 +147,6 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
       recv_requests_[i][j] = MPI_REQUEST_NULL;
     }
 
-
   if (test_case_id == 1)
   {
     this->reflective_ = true;
@@ -154,11 +159,6 @@ SWESolver::SWESolver(const int test_case_id, const std::size_t nx, const std::si
   }
   else
     assert(false);
-
-  std::cout << "Process " << c_rank_ << " initialized with grid size: "
-            << nx_ << "x" << ny_ << ", start coords: (" 
-            << m_start_coords_[0] << ", " << m_start_coords_[1] << ")" 
-            << std::endl;
 }
 
 SWESolver::SWESolver(const std::string &h5_file, const double size_x, const double size_y) :
@@ -241,8 +241,7 @@ SWESolver::init_gaussian()
   z_.resize(this->h0_.size());
   std::fill(z_.begin(), z_.end(), 0.0);
 
-  // Synchronize ghost cells across z-buffer. The rest of them are
-  // synchronized in solve function.
+  // Synchronize ghost cells across z-buffer.
   send_recv(z_, Buffer::Z);
   MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
   MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
@@ -273,18 +272,26 @@ SWESolver::init_dummy_tsunami()
   const double x0_2 = 0.7 * size_x_;
   const double y0_2 = 0.3 * size_y_;
 
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
+  const double dx = size_x_ / m_nx_;
+  const double dy = size_y_ / m_ny_;
 
   // Creating topography and initial water height
   z_.resize(nx_ * ny_);
   h0_.resize(nx_ * ny_);
-  for (std::size_t j = 0; j < ny_; ++j)
+  // Fill top ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i){
+    at(h0_, i, 0) = 0.0;
+    at(z_, i, 0) = 0.0;
+  }
+  for (std::size_t j = 1; j < ny_ - 1; ++j)
   {
-    for (std::size_t i = 0; i < nx_; ++i)
+    // Add left ghost cells
+    at(h0_, 0, j) = 0.0;
+    at(z_, 0, j) = 0.0;
+    for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
-      const double x = dx * (static_cast<double>(i) + 0.5);
-      const double y = dy * (static_cast<double>(j) + 0.5);
+      const double x = dx * (static_cast<double>(i + m_start_coords_[0] - 1) + 0.5);
+      const double y = dy * (static_cast<double>(j + m_start_coords_[1] - 1) + 0.5);
 
       const double gauss_0 = 2.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 3000.0);
       const double gauss_1 = 3.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 10000.0);
@@ -296,14 +303,29 @@ SWESolver::init_dummy_tsunami()
       double h0 = z < 0.0 ? -z + gauss_2 : 0.00001;
       at(h0_, i, j) = h0;
     }
+    // Add right ghost cells
+    at(h0_, nx_ - 1, j) = 0.0;
+    at(z_, nx_ - 1, j) = 0.0;
   }
+  // Fill bottom ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i)
+  {
+    at(h0_, i, ny_ - 1) = 0.0;
+    at(z_, i, ny_ - 1) = 0.0;
+  }
+
+  // Synchronize ghost cells across z-buffer.
+  send_recv(z_, Buffer::Z);
+  MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
+  MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
+
   this->init_dx_dy();
 }
 
 void
 SWESolver::init_dummy_slope()
 {
-  // TODO
+  // This function is paralelized for completeness, though never used.
   hu0_.resize(nx_ * ny_);
   hv0_.resize(nx_ * ny_);
   std::fill(hu0_.begin(), hu0_.end(), 0.0);
@@ -316,16 +338,24 @@ SWESolver::init_dummy_slope()
   std::fill(hu1_.begin(), hu1_.end(), 0.0);
   std::fill(hv1_.begin(), hv1_.end(), 0.0);
 
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
+  const double dx = size_x_ / m_nx_;
+  const double dy = size_y_ / m_ny_;
 
   const double dz = 10.0;
 
   // Creating topography and initial water height
   z_.resize(nx_ * ny_);
   h0_.resize(nx_ * ny_);
+  // Fill top ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i){
+    h0_.push_back(0.0);
+    z_.push_back(0.0);
+  }
   for (std::size_t j = 0; j < ny_; ++j)
   {
+    // Add left ghost cells
+    h0_.push_back(0.0);
+    z_.push_back(0.0);
     for (std::size_t i = 0; i < nx_; ++i)
     {
       const double x = dx * (static_cast<double>(i) + 0.5);
@@ -338,22 +368,37 @@ SWESolver::init_dummy_slope()
       double h0 = z < 0.0 ? -z : 0.00001;
       at(h0_, i, j) = h0;
     }
+    // Add right ghost cells
+    h0_.push_back(0.0);
+    z_.push_back(0.0);
   }
+  // Fill bottom ghost cells with zeros
+  for (std::size_t i = 0; i < nx_; ++i)
+  {
+    h0_.push_back(0.0);
+    z_.push_back(0.0);
+  }
+
+  // Synchronize ghost cells across z-buffer.
+  send_recv(z_, Buffer::Z);
+  MPI_Waitall(4, send_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
+  MPI_Waitall(4, recv_requests_[Buffer::Z],  MPI_STATUSES_IGNORE);
+
   this->init_dx_dy();
 }
 
 void
 SWESolver::init_dx_dy()
 {
-  // TODO
   zdx_.resize(this->z_.size(), 0.0);
   zdy_.resize(this->z_.size(), 0.0);
 
+  // We don't calculate the derivatives at ghost cells nor at the boundaries.
   const double dx = size_x_ / m_nx_;
   const double dy = size_y_ / m_ny_;
   // The derivatives don't exist at the boundaries nor at ghost cells.
-  for (std::size_t j = 1; j < ny_ - 1; ++j)
-    for (std::size_t i = 1; i < nx_ - 1; ++i)
+  for (std::size_t j = j_start_; j < j_end_; ++j)
+    for (std::size_t i = i_start_; i < i_end_; ++i)
     {
       at(this->zdx_, i, j) = 0.5 * (at(this->z_, i + 1, j) - at(this->z_, i - 1, j)) / dx;
       at(this->zdy_, i, j) = 0.5 * (at(this->z_, i, j + 1) - at(this->z_, i, j - 1)) / dy;
@@ -466,14 +511,8 @@ SWESolver::compute_time_step(const std::vector<double> &h,
   double nu_u = 0, nu_v = 0;
   // We are not interested in the ghost cells, nor in the boundaries.
   // These calculations are completely local.
-  std::size_t j_start = c_coords_[1] == 0 ? 2 : 1;
-  std::size_t j_end = c_coords_[1] == c_dims_[1] - 1 ? ny_ - 2 : ny_ - 1;
-  std::size_t i_start = c_coords_[0] == 0 ? 2 : 1;
-  std::size_t i_end = c_coords_[0] == c_dims_[0] - 1 ? nx_ - 2 : nx_ - 1;
-
-
-  for (std::size_t j = j_start; j < j_end; ++j)
-    for (std::size_t i = i_start; i < i_end; ++i)
+  for (std::size_t j = j_start_; j < j_end_; ++j)
+    for (std::size_t i = i_start_; i < i_end_; ++i)
     {
       nu_u = std::fabs(at(hu, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
       nu_v = std::fabs(at(hv, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
@@ -558,14 +597,9 @@ SWESolver::solve_step(const double dt,
                       std::vector<double> &hv) const
 {
   // We don't compute kernel at the boundaries nor at the ghost cells.
-  std::size_t j_start = c_coords_[1] == 0 ? 2 : 1;
-  std::size_t j_end = c_coords_[1] == c_dims_[1] - 1 ? ny_ - 2 : ny_ - 1;
-  std::size_t i_start = c_coords_[0] == 0 ? 2 : 1;
-  std::size_t i_end = c_coords_[0] == c_dims_[0] - 1 ? nx_ - 2 : nx_ - 1;
-
-  for (std::size_t j = j_start; j < j_end; ++j)
+  for (std::size_t j = j_start_; j < j_end_; ++j)
   {
-    for (std::size_t i = i_start; i < i_end; ++i)
+    for (std::size_t i = i_start_; i < i_end_; ++i)
     {
       this->compute_kernel(i, j, dt, h0, hu0, hv0, h, hu, hv);
     }
