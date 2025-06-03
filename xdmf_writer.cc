@@ -220,8 +220,13 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   // The implementation is based on 
   // https://github.com/HDFGroup/hdf5/blob/develop/HDF5Examples/C/H5PAR/ph5_hyperslab_by_chunk.c
 
+  // ----------------------------------------------------------------
+  // SET UP FILE
+  // ----------------------------------------------------------------
+
   hid_t   file_id;                                              // File identifier
   hid_t   plist_id;                                             // File access property list identifier
+  hid_t status;
 
   // Set up the HDF5 file access property list for parallel I/O
   plist_id = H5Pcreate(H5P_FILE_ACCESS);                        // Everyone can access the file
@@ -229,6 +234,7 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   H5Pset_coll_metadata_write(plist_id, true);                   // Enable collective metadata writes
 
   // Create the HDF5 file, erasing any existing data and using the parallel access property list
+  // This should be a collective call behind the curtains
   file_id = H5Fcreate(filename.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, plist_id);
   if (file_id < 0)
   {
@@ -237,74 +243,101 @@ XDMFWriter::write_array_to_hdf5(const std::string& filename,
   }
   H5Pclose(plist_id);
 
-  // We are writing a 1D array
-  hsize_t dimsf[1] = {m_nx_ * m_ny_};                        // Dataset is 1D vector with per-cell data
-  // Chunk doesn't contain ghost cells. It refers to the memory size of the data 
-  // that will be written to the file.
-  hsize_t chunk_dims[1];
-  chunk_dims[0] = (nx_ - 2) * (ny_ - 2);
-  hid_t filespace       = H5Screate_simple(1, dimsf, NULL);
-  hid_t memspace        = H5Screate_simple(1, chunk_dims, NULL);
+  // We store the output in 1D dataspace
+  // This is file dataspace
+  hsize_t f_dims[1] = {m_nx_ * m_ny_};         // |- max number of cells is null 
+  hid_t filespace   = H5Screate_simple(1, f_dims, NULL);
 
-  // Create chunked dataset as a 1D array
+  // Calculate chunk size for parallel I/O
+  // Each process writes ~ a chunk of the data per row
+  hsize_t chunk_dims[1];
+  if (w_rank_ == 0)
+  {
+    chunk_dims[0] = m_nx_ / c_dims_[0]; 
+  }
+  MPI_Bcast(chunk_dims, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
   plist_id = H5Pcreate(H5P_DATASET_CREATE);
   H5Pset_chunk(plist_id, 1, chunk_dims);
+
+  // Create the dataset in the file
   const std::string dataset_name_ = "/" + dataset_name;
-  hid_t dset_id = H5Dcreate(file_id, dataset_name_.c_str(), H5T_IEEE_F64LE, filespace, H5P_DEFAULT, plist_id, H5P_DEFAULT);
-  if (dset_id < 0)
+  hid_t dataset = H5Dcreate(file_id, dataset_name_.c_str(), H5T_IEEE_F64LE, filespace, H5P_DEFAULT, plist_id, H5P_DEFAULT);
+  if (dataset < 0)
   {
     std::cerr << "Error creating dataset" << std::endl;
-    H5Sclose(memspace);
     H5Sclose(filespace);
     H5Fclose(file_id);
     return;
   }
   H5Pclose(plist_id);
   H5Sclose(filespace);
-
+  
   // Select hyperslab in the file space
-  hsize_t offset[1], stride[1], count[1], block[1];
+  hsize_t foffset[1], fstride[1], fcount[1], fblock[1];
   // Offset is how many cells we skip going left and down
-  offset[0] = m_start_coords_[1]*m_nx_ + m_start_coords_[0];
+  foffset[0] = m_start_coords_[1]*m_nx_ + m_start_coords_[0];
   // Stride is just the number of cells along the x-dimension
-  stride[0] = m_nx_;
+  fstride[0] = m_nx_;
   // In the next two lines we need to ignore the ghost cells
   // Count is number of rows in the current submesh
-  count[0] = ny_ - 2;
+  fcount[0] = ny_ - 2;
   // Block is the number of cells in the current submesh
-  block[0] = nx_ - 2;
+  fblock[0] = nx_ - 2;
+  // Select the hyperslab in the file space
+  filespace = H5Dget_space(dataset);
+  status    = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, foffset, fstride, fcount, fblock);
+  
 
+  // ----------------------------------------------------------------
+  // SET UP MEMORY SPACE
+  // ----------------------------------------------------------------
+  // Create a memoryspace for the data we will write
+  hsize_t m_dims_mem[1] = {m_nx_ * m_ny_};
+  hid_t   memspace      = H5Screate_simple(1, m_dims_mem, NULL);
+
+  // Select the hyperslab in the memory space
+  hsize_t moffset[1], mstride[1], mcount[1], mblock[1];
+  // Offset is how many cells we skip going left and down
+  moffset[0] = nx_ + 1; // We skip the ghost cell and the first ghost row
+  // Stride is just the number of cells along the x-dimension
+  mstride[0] = nx_;         // Stride+offset skip the first ghost cell in row
+  // For count and block we ignore the ghost cells
+  mcount[0] = ny_ - 2;      // This skips the last ghost row
+  mblock[0] = nx_ - 2;      // This skips the last ghost cell in row
+  // Select the hyperslab in the memory space
+  status = H5Sselect_hyperslab(memspace, H5S_SELECT_SET, moffset, mstride, mcount, mblock);
   
-  filespace       = H5Dget_space(dset_id);
-  hid_t status    = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, stride, count, block);
+  // ----------------------------------------------------------------
+  // TRANSFER DATA
+  // ----------------------------------------------------------------
   
-  prepare_write_buffer(data);
-  
+  // Set up the dataset transfer property list for independent I/O
   plist_id = H5Pcreate(H5P_DATASET_XFER);
-  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
 
-  status = H5Dwrite(dset_id, H5T_IEEE_F64LE, memspace, filespace, plist_id, write_buffer_.data());
+  // Write the data to the dataset
+  status = H5Dwrite(dataset, H5T_IEEE_F64LE, memspace, filespace, plist_id, data.data());
   if (status < 0)
   {
     std::cerr << "Error writing data to dataset: " << dataset_name << std::endl;
   }
 
   // Close resources
-  H5Dclose(dset_id);
   H5Sclose(filespace);
+  H5Dclose(dataset);
   H5Sclose(memspace);
   H5Pclose(plist_id);
   H5Fclose(file_id);
 }
 
 
-void XDMFWriter::prepare_write_buffer(const std::vector<double>& data) {
-  // @brief We need to remove ghost cells and arrange the data into a 
-  // contiguous 1D array for writing to HDF5.
+// void XDMFWriter::prepare_write_buffer(const std::vector<double>& data) {
+//   // @brief We need to remove ghost cells and arrange the data into a 
+//   // contiguous 1D array for writing to HDF5.
   
-  write_buffer_.clear();
-  write_buffer_.reserve((nx_ - 2) * (ny_ - 2));
-  for (size_t j = 1; j < ny_ - 1; ++j)
-    for (size_t i = 1; i < nx_ - 1; ++i)
-        write_buffer_.push_back(data[j * nx_ + i]);
-}
+//   write_buffer_.clear();
+//   write_buffer_.reserve((nx_ - 2) * (ny_ - 2));
+//   for (size_t j = 1; j < ny_ - 1; ++j)
+//     for (size_t i = 1; i < nx_ - 1; ++i)
+//         write_buffer_.push_back(data[j * nx_ + i]);
+// }
