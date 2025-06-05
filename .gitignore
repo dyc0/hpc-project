@@ -1,0 +1,9 @@
+perf.data
+slurm-*.out
+gmon.out
+*.pvsm
+*.h5
+*.tar.gz
+old_prints.txt
+build/
+.vscode
