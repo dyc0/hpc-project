@@ -20,13 +20,15 @@ __constant__ double d_dy;
 __constant__ double d_dt;
 __constant__ double d_g;
 
-__forceinline__ __device__ double& at(double *array, int i, int j)
+__forceinline__ __device__ double& at(double *array, int i, int j, int stride)
 {
-  return array[i + j * d_nx];
+  return array[i + j * stride];
 }
 
 __device__ void compute_kernel(int i,
                               int j,
+                              int gi,
+                              int gj,
                               double *h0,
                               double *hu0,
                               double *hv0,
@@ -38,38 +40,39 @@ __device__ void compute_kernel(int i,
 {
   double C1x = 0.5 * d_dt / d_dx;
   double C1y = 0.5 * d_dt / d_dy;
-  double C2 = d_dt * d_g;
-  double C3 = 0.5 * d_g;
+  double C2  = d_dt * d_g;
+  double C3  = 0.5 * d_g;
+  int ts = blockDim.x + 2; // Tile stride, include ghost cells
 
-  double hij = 0.25 * (at(h0, i, j - 1) + at(h0, i, j + 1) + at(h0, i - 1, j) + at(h0, i + 1, j))
-               + C1x * (at(hu0, i - 1, j) - at(hu0, i + 1, j)) + C1y * (at(hv0, i, j - 1) - at(hv0, i, j + 1));
+  double hij = 0.25 * (at(h0, i, j - 1, ts) + at(h0, i, j + 1, ts) + at(h0, i - 1, j, ts) + at(h0, i + 1, j, ts))
+               + C1x * (at(hu0, i - 1, j, ts) - at(hu0, i + 1, j, ts)) + C1y * (at(hv0, i, j - 1, ts) - at(hv0, i, j + 1, ts));
   // Avoid if condition by boolean multiplication
   hij = hij*(hij >= 0.0) + 1.0e-5*(hij < 0.0); 
 
-  at(h, i, j) = hij;
+  at(h, gi, gj, d_nx) = hij;
   
   // Avoid branching and division by zero. We might get some idle
   // threads in a warp, but that should be better than double 
   // execution.
   hij = (hij > 0.0001) * hij + (hij <= 0.0001) * 1.0e-5; 
-  at(hu, i, j) = (hij > 0.0001) * (
-    0.25 * (at(hu0, i, j - 1) + at(hu0, i, j + 1) + at(hu0, i - 1, j) + at(hu0, i + 1, j)) - C2 * hij * at(zdx, i, j)
+  at(hu, gi, gj, d_nx) = (hij > 0.0001) * (
+    0.25 * (at(hu0, i, j - 1, ts) + at(hu0, i, j + 1, ts) + at(hu0, i - 1, j, ts) + at(hu0, i + 1, j, ts)) - C2 * hij * at(zdx, i, j, ts)
     + C1x
-        * (at(hu0, i - 1, j) * at(hu0, i - 1, j) / at(h0, i - 1, j) + C3 * at(h0, i - 1, j) * at(h0, i - 1, j)
-            - at(hu0, i + 1, j) * at(hu0, i + 1, j) / at(h0, i + 1, j) - C3 * at(h0, i + 1, j) * at(h0, i + 1, j))
+        * (at(hu0, i - 1, j, ts) * at(hu0, i - 1, j, ts) / at(h0, i - 1, j, ts) + C3 * at(h0, i - 1, j, ts) * at(h0, i - 1, j, ts)
+            - at(hu0, i + 1, j, ts) * at(hu0, i + 1, j, ts) / at(h0, i + 1, j, ts) - C3 * at(h0, i + 1, j, ts) * at(h0, i + 1, j, ts))
     + C1y
-        * (at(hu0, i, j - 1) * at(hv0, i, j - 1) / at(h0, i, j - 1)
-            - at(hu0, i, j + 1) * at(hv0, i, j + 1) / at(h0, i, j + 1))
+        * (at(hu0, i, j - 1, ts) * at(hv0, i, j - 1, ts) / at(h0, i, j - 1, ts)
+            - at(hu0, i, j + 1, ts) * at(hv0, i, j + 1, ts) / at(h0, i, j + 1, ts))
     );
 
-  at(hv, i, j) = (hij > 0.0001) * (
-    0.25 * (at(hv0, i, j - 1) + at(hv0, i, j + 1) + at(hv0, i - 1, j) + at(hv0, i + 1, j)) - C2 * hij * at(zdy, i, j)
+  at(hv, gi, gj, d_nx) = (hij > 0.0001) * (
+    0.25 * (at(hv0, i, j - 1, ts) + at(hv0, i, j + 1, ts) + at(hv0, i - 1, j, ts) + at(hv0, i + 1, j, ts)) - C2 * hij * at(zdy, i, j, ts)
     + C1x
-        * (at(hu0, i - 1, j) * at(hv0, i - 1, j) / at(h0, i - 1, j)
-            - at(hu0, i + 1, j) * at(hv0, i + 1, j) / at(h0, i + 1, j))
+        * (at(hu0, i - 1, j, ts) * at(hv0, i - 1, j, ts) / at(h0, i - 1, j, ts)
+            - at(hu0, i + 1, j, ts) * at(hv0, i + 1, j, ts) / at(h0, i + 1, j,ts))
     + C1y
-        * (at(hv0, i, j - 1) * at(hv0, i, j - 1) / at(h0, i, j - 1) + C3 * at(h0, i, j - 1) * at(h0, i, j - 1)
-            - at(hv0, i, j + 1) * at(hv0, i, j + 1) / at(h0, i, j + 1) - C3 * at(h0, i, j + 1) * at(h0, i, j + 1))
+        * (at(hv0, i, j - 1, ts) * at(hv0, i, j - 1, ts) / at(h0, i, j - 1, ts) + C3 * at(h0, i, j - 1, ts) * at(h0, i, j - 1, ts)
+            - at(hv0, i, j + 1, ts) * at(hv0, i, j + 1, ts) / at(h0, i, j + 1, ts) - C3 * at(h0, i, j + 1, ts) * at(h0, i, j + 1, ts))
     );
 }
 
@@ -86,42 +89,86 @@ __global__ void compute_step(double *h0,
   extern __shared__ double shared_memory[];
 
   // Shared memory arrays with padding for ghost cells
-  // double *s_h0, *s_hu0, *s_hv0, *s_h, *s_hu, *s_hv, *s_zdx, *s_zdy;
-  // s_h0  = &shared_memory[0];
-  // s_hu0 = &s_h0[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_hv0 = &s_hu0[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_h   = &s_hv0[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_hu  = &s_h[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_hv  = &s_hu[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_zdx = &s_hv[(blockDim.x + 2) * (blockDim.y + 2)];
-  // s_zdy = &s_zdx[(blockDim.x + 2) * (blockDim.y + 2)];
+  double *s_h0, *s_hu0, *s_hv0, *s_zdx, *s_zdy;
+  s_h0  = &shared_memory[0];
+  s_hu0 = &s_h0[(blockDim.x + 2) * (blockDim.y + 2)];
+  s_hv0 = &s_hu0[(blockDim.x + 2) * (blockDim.y + 2)];
+  s_zdx = &s_hv0[(blockDim.x + 2) * (blockDim.y + 2)];
+  s_zdy = &s_zdx[(blockDim.x + 2) * (blockDim.y + 2)];
 
-  // // Thread Indices in global matrix
-  // int gi = blockIdx.x * blockDim.x + threadIdx.x;
-  // int gj = blockIdx.y * blockDim.y + threadIdx.y;
+  // Thread Indices in shared memory (tiles), with padding
+  int si = threadIdx.x + 1;
+  int sj = threadIdx.y + 1; 
 
-  // // Thread Indices in shared memory, with padding
-  // int i = threadIdx.x + 1;
-  // int j = threadIdx.y + 1; 
+  // Thread Indices in global matrix, avoiding boundaries
+  int gi = blockIdx.x * blockDim.x + si;
+  int gj = blockIdx.y * blockDim.y + sj;
 
-  // // Copy data local into shared memory
-  // if (gi > 0 && gi < d_nx - 1 && gj > 0 && gj < d_ny - 1)
-  // {
-  //   at(s_h0, i, j, blockDim.x + 2) = at(h0, gi, gj, d_nx);
-  //   at(s_hu0, i, j, blockDim.x + 2) = at(hu0, gi, gj, d_nx);
-  //   at(s_hv0, i, j, blockDim.x + 2) = at(hv0, gi, gj, d_nx);
-  //   at(s_zdx, i, j, blockDim.x + 2) = at(zdx, gi, gj, d_nx);
-  //   at(s_zdy, i, j, blockDim.x + 2) = at(zdy, gi, gj, d_nx);
-  // }
+  // Copy local data into shared memory
+  if (gi < d_nx - 1 && gj < d_ny - 1)
+  {
+    at(s_h0,  si, sj, blockDim.x + 2) = at(h0,  gi, gj, d_nx);
+    at(s_hu0, si, sj, blockDim.x + 2) = at(hu0, gi, gj, d_nx);
+    at(s_hv0, si, sj, blockDim.x + 2) = at(hv0, gi, gj, d_nx);
+    at(s_zdx, si, sj, blockDim.x + 2) = at(zdx, gi, gj, d_nx);
+    at(s_zdy, si, sj, blockDim.x + 2) = at(zdy, gi, gj, d_nx);
+  }
 
-  // // Copy ghost cells
+  // Copy ghost cells. I don't think I can avoid branching here.
+  // Copying left and to ghosts is easy, because we align blocks with the grid,
+  // skipping boundary cells.
+  if (si == 1 && gi < d_nx - 1 && gj < d_ny - 1) {
+    // Left ghost cells
+    at(s_h0,  0, sj, blockDim.x + 2) = at(h0,  gi - 1, gj, d_nx);
+    at(s_hu0, 0, sj, blockDim.x + 2) = at(hu0, gi - 1, gj, d_nx);
+    at(s_hv0, 0, sj, blockDim.x + 2) = at(hv0, gi - 1, gj, d_nx);
+    at(s_zdx, 0, sj, blockDim.x + 2) = at(zdx, gi - 1, gj, d_nx);
+    at(s_zdy, 0, sj, blockDim.x + 2) = at(zdy, gi - 1, gj, d_nx);
+  }
+  if (sj == 1 && gi < d_nx - 1 && gj < d_ny - 1) {
+    // Top ghost cells
+    at(s_h0,  si, 0, blockDim.x + 2) = at(h0,  gi, gj - 1, d_nx);
+    at(s_hu0, si, 0, blockDim.x + 2) = at(hu0, gi, gj - 1, d_nx);
+    at(s_hv0, si, 0, blockDim.x + 2) = at(hv0, gi, gj - 1, d_nx);
+    at(s_zdx, si, 0, blockDim.x + 2) = at(zdx, gi, gj - 1, d_nx);
+    at(s_zdy, si, 0, blockDim.x + 2) = at(zdy, gi, gj - 1, d_nx);
+  }
 
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  int j = blockIdx.y * blockDim.y + threadIdx.y;
+  // Copying bottom and right ghost cells is a bit more tricky, because a block
+  // can spill over the matrix boundaries. We need to copy the data into appropriate
+  // cells that will be used in the caluclations.
 
-  // Don't do boundaries
-  if (i > 0 && i < d_nx-1 && j > 0 && j < d_ny-1)
-    compute_kernel(i, j, h0, hu0, hv0, h, hu, hv, zdx, zdy);
+  // Here we calculate the left boundary. If the block is completely inside the matrix,
+  // a thread should copy the ghost cells iff it is at the edge of the block.
+  // Otherwise, the thread that corresponds to the last interior cell of the full matrix
+  // should copy the ghost. The first mask corresponds to the interior case. Last term
+  // in its boolean expression avoids overlapping in case the blocks are totally aligned
+  // with the matrix. Second mask corresponds to the case that the block covers exterior
+  // of the mesh. The values of ghosts are not neccessarily at the block boundary.
+  //  |-  block is fully inside the matrix                 |- block is partially outside
+  if ((si == blockDim.x && gi < d_nx-1 && gi != d_nx-2) || (gi == d_nx-2) && gj < d_ny - 1) {
+    // Right ghost cells
+    at(s_h0,  si + 1, sj, blockDim.x + 2) = at(h0,  gi + 1, gj, d_nx);
+    at(s_hu0, si + 1, sj, blockDim.x + 2) = at(hu0, gi + 1, gj, d_nx);
+    at(s_hv0, si + 1, sj, blockDim.x + 2) = at(hv0, gi + 1, gj, d_nx);
+    at(s_zdx, si + 1, sj, blockDim.x + 2) = at(zdx, gi + 1, gj, d_nx);
+    at(s_zdy, si + 1, sj, blockDim.x + 2) = at(zdy, gi + 1, gj, d_nx);
+  }
+  // The previous reasoning is repeated for the bottom ghost cells.
+  if (((sj == blockDim.y && gj < d_ny-1 && gj != d_ny-2) || (gj == d_ny-2)) && gi < d_nx - 1) {
+    // Bottom ghost cells
+    at(s_h0,  si, sj + 1, blockDim.x + 2) = at(h0,  gi, gj + 1, d_nx);
+    at(s_hu0, si, sj + 1, blockDim.x + 2) = at(hu0, gi, gj + 1, d_nx);
+    at(s_hv0, si, sj + 1, blockDim.x + 2) = at(hv0, gi, gj + 1, d_nx);
+    at(s_zdx, si, sj + 1, blockDim.x + 2) = at(zdx, gi, gj + 1, d_nx);
+    at(s_zdy, si, sj + 1, blockDim.x + 2) = at(zdy, gi, gj + 1, d_nx);
+  }
+
+  __syncthreads();
+
+  // Don't do boundaries. gi, gj > 0 by design, so we only check the upper bounds.
+  if (gi < d_nx-1 && gj < d_ny-1)
+    compute_kernel(si, sj, gi, gj, s_h0, s_hu0, s_hv0, h, hu, hv, s_zdx, s_zdy);
 }
 
 
@@ -187,7 +234,7 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     this->update_bcs(h0, hu0, hv0, h, hu, hv);
     copy_to_device(h0, hu0, hv0, h, hu, hv);
 
-    compute_step<<<grid_size, block_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
+    compute_step<<<grid_size, block_size, shared_memory_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
     err = cudaGetLastError();
     log_cuda_error(err, "Failed to launch compute_step kernel");
 

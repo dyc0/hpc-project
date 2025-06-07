@@ -1,6 +1,6 @@
-CXX=g++
+CXX=nvcc
 LD=${CXX}
-CXXFLAGS+=-Wall -Wextra -pedantic -std=c++11 -I${HDF5_ROOT}/include # -Werror
+CXXFLAGS+=-Xcompiler="-Wall -Wextra" -std=c++11 -I${HDF5_ROOT}/include # -Werror
 LDFLAGS+=-lm $(CXXFLAGS) -L${HDF5_ROOT}/lib -lhdf5
 
 
@@ -21,8 +21,12 @@ endif
 SRC_DIR = .
 BUILD_DIR = build
 
-SRCS = $(wildcard $(SRC_DIR)/*.cc)
-OBJS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(SRCS))
+CC_SRCS = $(wildcard $(SRC_DIR)/*.cc)
+CU_SRCS = $(wildcard $(SRC_DIR)/*.cu)
+SRCS = $(CC_SRCS) $(CU_SRCS)
+CC_OBJS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(CC_SRCS))
+CU_OBJS = $(patsubst $(SRC_DIR)/%.cu,$(BUILD_DIR)/%.o,$(CU_SRCS))
+OBJS = $(CC_OBJS) $(CU_OBJS)
 TARGET = $(BUILD_DIR)/swe
 
 all: $(TARGET)
@@ -33,13 +37,17 @@ $(TARGET): $(OBJS) | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-clean: clean_otput
+clean: clean_output
 	rm -rf $(BUILD_DIR)
 	
-clean_otput:
+clean_output:
 	rm -f perf.data
 	rm -f slurm-*.out
 	rm -f gmon.out
+	rm -rf parallel_tests/*

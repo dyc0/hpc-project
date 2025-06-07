@@ -15,7 +15,7 @@ main()
   const std::size_t ny = 1000; // Number of cells per direction.
   const std::size_t output_n = 20; // For profiling, I use 0
                                   // TODO: Come back to this and profile IO
-  const std::string output_fname = "water_drops";
+  const std::string output_fname = "parallel_tests/water_drops";
   const bool full_log = false;
 
   SWESolver solver(test_case_id, nx, ny);

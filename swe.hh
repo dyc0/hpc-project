@@ -101,6 +101,11 @@ private:
   std::vector<double> zdx_;
   std::vector<double> zdy_;
 
+  double *d_h0, *d_h;
+  double *d_hu0, *d_hu;
+  double *d_hv0, *d_hv;
+  double *d_zdx, *d_zdy;
+
   /**
    * @brief Accessor for 2D vector elements.
    */
@@ -118,27 +123,27 @@ private:
     return vec[j * nx_ + i];
   }
 
-  /**
-   * @brief Updates the water height and velocities using the SWE kernel at a given cell.
-   * @param i x index of the cell.
-   * @param j y index of the cell.
-   * @param dt Time step.
-   * @param h0 The water height in the previous time step.
-   * @param hu0 The x water velocity in the previous time step.
-   * @param hv0 The y water velocity in the previous time step.
-   * @param h The water height in the current time step.
-   * @param hu The x water velocity in the current time step.
-   * @param hv The y water velocity in the current time step.
-   */
-  void compute_kernel(const std::size_t i,
-                      const std::size_t j,
-                      const double dt,
-                      const std::vector<double> &h0,
-                      const std::vector<double> &hu0,
-                      const std::vector<double> &hv0,
-                      std::vector<double> &h,
-                      std::vector<double> &hu,
-                      std::vector<double> &hv) const;
+  // /**
+  //  * @brief Updates the water height and velocities using the SWE kernel at a given cell.
+  //  * @param i x index of the cell.
+  //  * @param j y index of the cell.
+  //  * @param dt Time step.
+  //  * @param h0 The water height in the previous time step.
+  //  * @param hu0 The x water velocity in the previous time step.
+  //  * @param hv0 The y water velocity in the previous time step.
+  //  * @param h The water height in the current time step.
+  //  * @param hu The x water velocity in the current time step.
+  //  * @param hv The y water velocity in the current time step.
+  //  */
+  // void compute_kernel(const std::size_t i,
+  //                     const std::size_t j,
+  //                     const double dt,
+  //                     const std::vector<double> &h0,
+  //                     const std::vector<double> &hu0,
+  //                     const std::vector<double> &hv0,
+  //                     std::vector<double> &h,
+  //                     std::vector<double> &hu,
+  //                     std::vector<double> &hv) const;
 
   /**
    * @brief Computes the time step size that satisfied the CFL condition.
@@ -190,4 +195,19 @@ private:
                   std::vector<double> &h,
                   std::vector<double> &hu,
                   std::vector<double> &hv) const;
+
+  void initialize_cuda_constants();
+  void initialize_cuda_arrays();
+  void copy_to_device(std::vector<double> &h0,
+                      std::vector<double> &hu0,
+                      std::vector<double> &hv0,
+                      std::vector<double> &h1,
+                      std::vector<double> &hu1,
+                      std::vector<double> &hv1);
+  void copy_from_device(std::vector<double> &h0,
+                        std::vector<double> &hu0,
+                        std::vector<double> &hv0,
+                        std::vector<double> &h1,
+                        std::vector<double> &hu1,
+                        std::vector<double> &hv1);
 };

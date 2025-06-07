@@ -288,72 +288,6 @@ SWESolver::init_dx_dy()
   }
 }
 
-void
-SWESolver::solve(const double Tend, const bool full_log, const std::size_t output_n, const std::string &fname_prefix)
-{
-  std::shared_ptr<XDMFWriter> writer;
-  if (output_n > 0)
-  {
-    writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
-    writer->add_h(h0_, 0.0);
-  }
-
-  double T = 0.0;
-
-  std::vector<double> &h = h1_;
-  std::vector<double> &hu = hu1_;
-  std::vector<double> &hv = hv1_;
-
-  std::vector<double> &h0 = h0_;
-  std::vector<double> &hu0 = hu0_;
-  std::vector<double> &hv0 = hv0_;
-
-  std::cout << "Solving SWE..." << std::endl;
-
-  std::size_t nt = 1;
-  while (T < Tend)
-  {
-    const double dt = this->compute_time_step(h0, hu0, hv0, T, Tend);
-
-    const double T1 = T + dt;
-
-    printf("Computing T: %2.4f hr  (dt = %.2e s) -- %3.3f%%", T1, dt * 3600, 100 * T1 / Tend);
-    std::cout << (full_log ? "\n" : "\r") << std::flush;
-
-    this->update_bcs(h0, hu0, hv0, h, hu, hv);
-
-    this->solve_step(dt, h0, hu0, hv0, h, hu, hv);
-
-    if (output_n > 0 && nt % output_n == 0)
-    {
-      writer->add_h(h, T1);
-    }
-    ++nt;
-
-    // Swap the old and new solutions
-    std::swap(h, h0);
-    std::swap(hu, hu0);
-    std::swap(hv, hv0);
-
-    T = T1;
-  }
-
-  // Copying last computed values to h1_, hu1_, hv1_ (if needed)
-  if (&h0 != &h1_)
-  {
-    h1_ = h0;
-    hu1_ = hu0;
-    hv1_ = hv0;
-  }
-
-  if (output_n > 0)
-  {
-    writer->add_h(h1_, T);
-  }
-
-  std::cout << "Finished solving SWE." << std::endl;
-}
-
 double
 SWESolver::compute_time_step(const std::vector<double> &h,
                              const std::vector<double> &hu,
@@ -384,77 +318,6 @@ SWESolver::compute_time_step(const std::vector<double> &h,
 }
 
 void
-SWESolver::compute_kernel(const std::size_t i,
-                          const std::size_t j,
-                          const double dt,
-                          const std::vector<double> &h0,
-                          const std::vector<double> &hu0,
-                          const std::vector<double> &hv0,
-                          std::vector<double> &h,
-                          std::vector<double> &hu,
-                          std::vector<double> &hv) const
-{
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
-  const double C1x = 0.5 * dt / dx;
-  const double C1y = 0.5 * dt / dy;
-  const double C2 = dt * g;
-  constexpr double C3 = 0.5 * g;
-
-  double hij = 0.25 * (at(h0, i, j - 1) + at(h0, i, j + 1) + at(h0, i - 1, j) + at(h0, i + 1, j))
-               + C1x * (at(hu0, i - 1, j) - at(hu0, i + 1, j)) + C1y * (at(hv0, i, j - 1) - at(hv0, i, j + 1));
-  if (hij < 0.0)
-  {
-    hij = 1.0e-5;
-  }
-
-  at(h, i, j) = hij;
-
-  if (hij > 0.0001)
-  {
-    at(hu, i, j) =
-      0.25 * (at(hu0, i, j - 1) + at(hu0, i, j + 1) + at(hu0, i - 1, j) + at(hu0, i + 1, j)) - C2 * hij * at(zdx_, i, j)
-      + C1x
-          * (at(hu0, i - 1, j) * at(hu0, i - 1, j) / at(h0, i - 1, j) + C3 * at(h0, i - 1, j) * at(h0, i - 1, j)
-             - at(hu0, i + 1, j) * at(hu0, i + 1, j) / at(h0, i + 1, j) - C3 * at(h0, i + 1, j) * at(h0, i + 1, j))
-      + C1y
-          * (at(hu0, i, j - 1) * at(hv0, i, j - 1) / at(h0, i, j - 1)
-             - at(hu0, i, j + 1) * at(hv0, i, j + 1) / at(h0, i, j + 1));
-
-    at(hv, i, j) =
-      0.25 * (at(hv0, i, j - 1) + at(hv0, i, j + 1) + at(hv0, i - 1, j) + at(hv0, i + 1, j)) - C2 * hij * at(zdy_, i, j)
-      + C1x
-          * (at(hu0, i - 1, j) * at(hv0, i - 1, j) / at(h0, i - 1, j)
-             - at(hu0, i + 1, j) * at(hv0, i + 1, j) / at(h0, i + 1, j))
-      + C1y
-          * (at(hv0, i, j - 1) * at(hv0, i, j - 1) / at(h0, i, j - 1) + C3 * at(h0, i, j - 1) * at(h0, i, j - 1)
-             - at(hv0, i, j + 1) * at(hv0, i, j + 1) / at(h0, i, j + 1) - C3 * at(h0, i, j + 1) * at(h0, i, j + 1));
-  }
-  else
-  {
-    at(hu, i, j) = 0.0;
-    at(hv, i, j) = 0.0;
-  }
-
-  // h(2:nx-1,2:nx-1) = 0.25*(h0(2:nx-1,1:nx-2)+h0(2:nx-1,3:nx)+h0(1:nx-2,2:nx-1)+h0(3:nx,2:nx-1)) ...
-  //     + C1*( hu0(2:nx-1,1:nx-2) - hu0(2:nx-1,3:nx) + hv0(1:nx-2,2:nx-1) - hvhv0:nx,2:nx-1) );
-
-  // hu(2:nx-1,2:nx-1) = 0.25*(hu0(2:nx-1,1:nx-2)+hu0(2:nx-1,3:nx)+hu0(1:nx-2,2:nx-1)+hu0(3:nx,2:nx-1)) -
-  // C2*H(2:nx-1,2:nx-1).*Zdx(2:nx-1,2:nx-1) ...
-  //     + C1*( hu0(2:nx-1,1:nx-2).^2./h0(2:nx-1,1:nx-2) + 0.5*g*h0(2:nx-1,1:nx-2).^2 -
-  //     hu0(2:nx-1,3:nx).^2./h0(2:nx-1,3:nx) - 0.5*g*h0(2:nx-1,3:nx).^2 ) ...
-  //     + C1*( hu0(1:nx-2,2:nx-1).*hv0(1:nx-2,2:nx-1)./h0(1:nx-2,2:nx-1) -
-  //     hu0(3:nx,2:nx-1).*hv0(3:nx,2:nx-1)./h0(3:nx,2:nx-1) );
-
-  // hv(2:nx-1,2:nx-1) = 0.25*(hv0(2:nx-1,1:nx-2)+hv0(2:nx-1,3:nx)+hv0(1:nx-2,2:nx-1)+hv0(3:nx,2:nx-1)) -
-  // C2*H(2:nx-1,2:nx-1).*Zdy(2:nx-1,2:nx-1)  ...
-  //     + C1*( hu0(2:nx-1,1:nx-2).*hv0(2:nx-1,1:nx-2)./h0(2:nx-1,1:nx-2) -
-  //     hu0(2:nx-1,3:nx).*hv0(2:nx-1,3:nx)./h0(2:nx-1,3:nx) ) ...
-  //     + C1*( hv0(1:nx-2,2:nx-1).^2./h0(1:nx-2,2:nx-1) + 0.5*g*h0(1:nx-2,2:nx-1).^2 -
-  //     hv0(3:nx,2:nx-1).^2./h0(3:nx,2:nx-1) - 0.5*g*h0(3:nx,2:nx-1).^2  );
-}
-
-void
 SWESolver::solve_step(const double dt,
                       const std::vector<double> &h0,
                       const std::vector<double> &hu0,
@@ -467,7 +330,7 @@ SWESolver::solve_step(const double dt,
   {
     for (std::size_t i = 1; i < nx_ - 1; ++i)
     {
-      this->compute_kernel(i, j, dt, h0, hu0, hv0, h, hu, hv);
+      // this->compute_kernel(i, j, dt, h0, hu0, hv0, h, hu, hv);
     }
   }
 }
