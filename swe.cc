@@ -335,39 +335,39 @@ SWESolver::solve_step(const double dt,
   }
 }
 
-void
-SWESolver::update_bcs(const std::vector<double> &h0,
-                      const std::vector<double> &hu0,
-                      const std::vector<double> &hv0,
-                      std::vector<double> &h,
-                      std::vector<double> &hu,
-                      std::vector<double> &hv) const
-{
-  const double coef = this->reflective_ ? -1.0 : 1.0;
+// void
+// SWESolver::update_bcs( double *h0,
+//                        double *hu0,
+//                        double *hv0,
+//                        double *h,
+//                        double *hu,
+//                        double *hv) const
+// {
+//   const double coef = this->reflective_ ? -1.0 : 1.0;
 
-  // Top and bottom boundaries.
-  for (std::size_t i = 0; i < nx_; ++i)
-  {
-    at(h, i, 0) = at(h0, i, 1);
-    at(h, i, ny_ - 1) = at(h0, i, ny_ - 2);
+//   // Top and bottom boundaries.
+//   for (std::size_t i = 0; i < nx_; ++i)
+//   {
+//     at(h, i, 0) = at(h0, i, 1);
+//     at(h, i, ny_ - 1) = at(h0, i, ny_ - 2);
 
-    at(hu, i, 0) = at(hu0, i, 1);
-    at(hu, i, ny_ - 1) = at(hu0, i, ny_ - 2);
+//     at(hu, i, 0) = at(hu0, i, 1);
+//     at(hu, i, ny_ - 1) = at(hu0, i, ny_ - 2);
 
-    at(hv, i, 0) = coef * at(hv0, i, 1);
-    at(hv, i, ny_ - 1) = coef * at(hv0, i, ny_ - 2);
-  }
+//     at(hv, i, 0) = coef * at(hv0, i, 1);
+//     at(hv, i, ny_ - 1) = coef * at(hv0, i, ny_ - 2);
+//   }
 
-  // Left and right boundaries.
-  for (std::size_t j = 0; j < ny_; ++j)
-  {
-    at(h, 0, j) = at(h0, 1, j);
-    at(h, nx_ - 1, j) = at(h0, nx_ - 2, j);
+//   // Left and right boundaries.
+//   for (std::size_t j = 0; j < ny_; ++j)
+//   {
+//     at(h, 0, j) = at(h0, 1, j);
+//     at(h, nx_ - 1, j) = at(h0, nx_ - 2, j);
 
-    at(hu, 0, j) = coef * at(hu0, 1, j);
-    at(hu, nx_ - 1, j) = coef * at(hu0, nx_ - 2, j);
+//     at(hu, 0, j) = coef * at(hu0, 1, j);
+//     at(hu, nx_ - 1, j) = coef * at(hu0, nx_ - 2, j);
 
-    at(hv, 0, j) = at(hv0, 1, j);
-    at(hv, nx_ - 1, j) = at(hv0, nx_ - 2, j);
-  }
-};
+//     at(hv, 0, j) = at(hv0, 1, j);
+//     at(hv, nx_ - 1, j) = at(hv0, nx_ - 2, j);
+//   }
+// };

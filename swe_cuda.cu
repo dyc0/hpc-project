@@ -19,24 +19,18 @@ __constant__ double d_dx;
 __constant__ double d_dy;
 __constant__ double d_dt;
 __constant__ double d_g;
+__constant__ double d_reflect;
 
 __forceinline__ __device__ double& at(double *array, int i, int j, int stride)
 {
   return array[i + j * stride];
 }
 
-__device__ void compute_kernel(int i,
-                              int j,
-                              int gi,
-                              int gj,
-                              double *h0,
-                              double *hu0,
-                              double *hv0,
-                              double *h,
-                              double *hu,
-                              double *hv,
-                              double *zdx,
-                              double *zdy)
+__device__ void compute_kernel(int i, int j, 
+                               int gi, int gj, 
+                               double *h0, double *hu0, double *hv0, 
+                               double *h, double *hu, double *hv, 
+                               double *zdx, double *zdy)
 {
   double C1x = 0.5 * d_dt / d_dx;
   double C1y = 0.5 * d_dt / d_dy;
@@ -77,14 +71,9 @@ __device__ void compute_kernel(int i,
 }
 
 
-__global__ void compute_step(double *h0,
-                             double *hu0,
-                             double *hv0,
-                             double *h,
-                             double *hu,
-                             double *hv,
-                             double *zdx,
-                             double *zdy)
+__global__ void compute_step(double *h0, double *hu0, double *hv0, 
+                             double *h, double *hu, double *hv, 
+                             double *zdx, double *zdy)
 {
   extern __shared__ double shared_memory[];
 
@@ -172,6 +161,50 @@ __global__ void compute_step(double *h0,
 }
 
 
+__global__ void update_bcs(double *h0, double *hu0, double *hv0, 
+                             double *h, double *hu, double *hv)
+{
+  // Update boundary conditions for h, hu, hv
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  // Used for indexing the boundary cells, either row or column,
+  // depending on the context.
+  int idx;
+
+  // There are a lot of ifs here, but with good block size, I think we
+  // can avoid branching in the kernel by forcing warps to mostly work on
+  // the same part of the boundary.
+  if (tid < d_nx)    // Top boundary
+  {
+    idx = tid;
+    at(h,  idx, 0, d_nx) = at(h0, idx, 1, d_nx);
+    at(hu, idx, 0, d_nx) = at(hu0, idx, 1, d_nx);
+    at(hv, idx, 0, d_nx) = d_reflect * at(hv0, idx, 1, d_nx);
+  }
+  else if (tid > d_nx && tid < d_nx + d_ny)    // Right boundary
+  {
+    idx = tid - d_nx;
+    at(h,  d_nx - 1, idx, d_nx) = at(h0, d_nx - 2, idx, d_nx);
+    at(hu, d_nx - 1, idx, d_nx) = d_reflect * at(hu0, d_nx - 2, idx, d_nx);
+    at(hv, d_nx - 1, idx, d_nx) = at(hv0, d_nx - 2, idx, d_nx);
+  }
+  else if (tid > d_nx + d_ny && tid < 2*d_nx + d_ny)    // Bottom boundary
+  {
+    idx = tid - (d_nx + d_ny);
+    // It doesn't matter we don't go clockwise.
+    at(h,  idx, d_ny - 1, d_nx) = at(h0,  idx, d_ny - 2, d_nx);
+    at(hu, idx, d_ny - 1, d_nx) = at(hu0, idx, d_ny - 2, d_nx);
+    at(hv, idx, d_ny - 1, d_nx) = d_reflect * at(hv0, idx, d_ny - 2, d_nx);
+  }
+  else if (tid > 2*d_nx + d_ny && tid < 2*(d_nx + d_ny))    // Left boundary
+  {
+    idx = tid - (2 * d_nx + d_ny);
+    at(h,  0, idx, d_nx) = at(h0, 1, idx, d_nx);
+    at(hu, 0, idx, d_nx) = d_reflect * at(hu0, 1, idx, d_nx);
+    at(hv, 0, idx, d_nx) = at(hv0, 1, idx, d_nx);
+  }
+}
+
+
 void log_cuda_error(cudaError_t err, std::string additional_info) {
   if (err != cudaSuccess) {
     std::cerr << "CUDA error: " << cudaGetErrorString(err) << " " << additional_info << std::endl;
@@ -202,12 +235,17 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
 
   // CUDA variables
   cudaError_t err;
-  dim3 block_size(16, 16); // Define block size
-  dim3 grid_size((nx_ + block_size.x - 1) / block_size.x, (ny_ + block_size.y - 1) / block_size.y);
+
+  // Dimensions used for the computation of interior values
+  dim3 stencil_block_size(16, 16); // Define block size
+  dim3 stencil_grid_size((nx_ + stencil_block_size.x - 1) / stencil_block_size.x, (ny_ + stencil_block_size.y - 1) / stencil_block_size.y);
   // Pad the shared memory of a tile, 5 padded shared arrays
-  int shared_memory_size = 5 * (block_size.x + 2) * (block_size.y + 2) * sizeof(double);
+  int shared_memory_size = 5 * (stencil_block_size.x + 2) * (stencil_block_size.y + 2) * sizeof(double);
   
-  
+  // Dimensions used for computation of boundary values
+  dim3 bdry_block_size(128);
+  dim3 bdry_grid_size(2 * (nx_ + ny_ + bdry_block_size.x - 1) / bdry_block_size.x);
+
   // Initialize CUDA arrays and constants
   initialize_cuda_constants();
   initialize_cuda_arrays();
@@ -216,8 +254,10 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   log_cuda_error(err, "Failed to copy zdx_ to device");
   err = cudaMemcpy(d_zdy, zdy_.data(), zdy_.size() * sizeof(double), cudaMemcpyHostToDevice);
   log_cuda_error(err, "Failed to copy zdy_ to device");
+  double *tmp;      // For buffer swapping
 
   std::cout << "Solving SWE..." << std::endl;
+  
 
   std::size_t nt = 1;
   while (T < Tend)
@@ -231,10 +271,10 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     printf("Computing T: %2.4f hr  (dt = %.2e s) -- %3.3f%%", T1, dt * 3600, 100 * T1 / Tend);
     std::cout << (full_log ? "\n" : "\r") << std::flush;
 
-    this->update_bcs(h0, hu0, hv0, h, hu, hv);
     copy_to_device(h0, hu0, hv0, h, hu, hv);
+    update_bcs<<<bdry_grid_size, bdry_block_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv);
 
-    compute_step<<<grid_size, block_size, shared_memory_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
+    compute_step<<<stencil_grid_size, stencil_block_size, shared_memory_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
     err = cudaGetLastError();
     log_cuda_error(err, "Failed to launch compute_step kernel");
 
@@ -289,6 +329,9 @@ void SWESolver::initialize_cuda_constants() {
   tmp = g;
   err = cudaMemcpyToSymbol(d_g, &tmp, sizeof(double));
   log_cuda_error(err, "Failed to copy g to constant memory");
+  tmp = reflective_ ? -1.0 :1.0;
+  err = cudaMemcpyToSymbol(d_reflect, &tmp, sizeof(double));
+  log_cuda_error(err, "Failed to copy reflect to constant memory");
 };
 
 

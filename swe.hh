@@ -179,22 +179,22 @@ private:
                   std::vector<double> &hu,
                   std::vector<double> &hv) const;
 
-  /**
-   * @brief Update boundary conditions.
-   * @note This function updates the boundary conditions for the SWE solver.
-   * @param h0 The water height in the previous time step.
-   * @param hu0 The x water velocity in the previous time step.
-   * @param hv0 The y water velocity in the previous time step.
-   * @param h The water height in the current time step.
-   * @param hu The x water velocity in the current time step.
-   * @param hv The y water velocity in the current time step.
-   */
-  void update_bcs(const std::vector<double> &h0,
-                  const std::vector<double> &hu0,
-                  const std::vector<double> &hv0,
-                  std::vector<double> &h,
-                  std::vector<double> &hu,
-                  std::vector<double> &hv) const;
+  // /**
+  //  * @brief Update boundary conditions.
+  //  * @note This function updates the boundary conditions for the SWE solver.
+  //  * @param h0 The water height in the previous time step.
+  //  * @param hu0 The x water velocity in the previous time step.
+  //  * @param hv0 The y water velocity in the previous time step.
+  //  * @param h The water height in the current time step.
+  //  * @param hu The x water velocity in the current time step.
+  //  * @param hv The y water velocity in the current time step.
+  //  */
+  // void update_bcs(const std::vector<double> &h0,
+  //                 const std::vector<double> &hu0,
+  //                 const std::vector<double> &hv0,
+  //                 std::vector<double> &h,
+  //                 std::vector<double> &hu,
+  //                 std::vector<double> &hv) const;
 
   void initialize_cuda_constants();
   void initialize_cuda_arrays();
