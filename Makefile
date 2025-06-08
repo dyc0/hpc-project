@@ -9,14 +9,13 @@ ifeq ($(BUILD),debug)
     CXXFLAGS += -g -O0 -DDEBUG
 endif
 ifeq ($(BUILD),profile)
-    CXXFLAGS += -pg -O3
+    CXXFLAGS += -pg -O3 -DPROFILING
     LDFLAGS  += -pg -O3
 endif
 ifeq ($(BUILD),release)
 	CXXFLAGS += -O3
 	LDFLAGS  += -O3
 endif
-
 
 SRC_DIR = .
 BUILD_DIR = build

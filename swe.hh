@@ -49,7 +49,9 @@ public:
   void solve(const double Tend,
              const bool full_log = false,
              const std::size_t output_n = 0,
-             const std::string &fname_prefix = "test");
+             const std::string &fname_prefix = "test",
+             int block_dim_x = 16,
+             int block_dim_y = 16);
 
 private:
   /**
@@ -91,12 +93,9 @@ private:
   double size_x_;
   double size_y_;
   bool reflective_;
-  std::vector<double> h0_;
-  std::vector<double> h1_;
-  std::vector<double> hu0_;
-  std::vector<double> hu1_;
-  std::vector<double> hv0_;
-  std::vector<double> hv1_;
+  std::vector<double> h_;
+  std::vector<double> hu_;
+  std::vector<double> hv_;
   std::vector<double> z_;
   std::vector<double> zdx_;
   std::vector<double> zdy_;
@@ -125,53 +124,38 @@ private:
   }
 
   /**
-   * @brief Computes the time step size that satisfied the CFL condition.
-   *
-   * @param h The water height in the current time step.
-   * @param hu The x water velocity in the current time step.
-   * @param hv The y water velocity in the current time step.
-   * @param T Current time.
-   * @param Tend Final time.
-   * @return Compute time step.
+   * @brief Copies global constants to the device.
    */
-  double compute_time_step(const std::vector<double> &h,
-                           const std::vector<double> &hu,
-                           const std::vector<double> &hv,
-                           const double T,
-                           const double Tend) const;
+  void initialize_cuda_constants();
 
   /**
-   * @brief Solve one step of the SWE.
-   * @param dt The time step size.
-   * @param h0 The water height in the previous time step.
-   * @param hu0 The x water velocity in the previous time step.
-   * @param hv0 The y water velocity in the previous time step.
-   * @param h The water height in the current time step.
-   * @param hu The x water velocity in the current time step.
-   * @param hv The y water velocity in the current time step.
+   * @brief Initializes h0, hu0, hv0, h1, hu1, hv1 arrays on the device.
    */
-  void solve_step(const double dt,
-                  const std::vector<double> &h0,
-                  const std::vector<double> &hu0,
-                  const std::vector<double> &hv0,
-                  std::vector<double> &h,
-                  std::vector<double> &hu,
-                  std::vector<double> &hv) const;
-
-  void initialize_cuda_constants();
   void initialize_cuda_arrays();
-  void copy_to_device(std::vector<double> &h0,
-                      std::vector<double> &hu0,
-                      std::vector<double> &hv0,
-                      std::vector<double> &h1,
-                      std::vector<double> &hu1,
-                      std::vector<double> &hv1);
-  void copy_from_device(std::vector<double> &h0,
-                        std::vector<double> &hu0,
-                        std::vector<double> &hv0,
-                        std::vector<double> &h1,
-                        std::vector<double> &hu1,
-                        std::vector<double> &hv1);
+
+  /**
+   * @brief Copies the initial state h0, hu0, hv0 to the device. Also fills
+   * h1, hu1, hv1 with zeros.
+   */
+  void copy_to_device(std::vector<double> &h,
+                      std::vector<double> &hu,
+                      std::vector<double> &hv);
+
+  /** 
+   * @brief Copies the current state h, hu, hv from the device to the host.
+   */
+  void copy_from_device(std::vector<double> &h,
+                        std::vector<double> &hu,
+                        std::vector<double> &hv);
+
+  /**
+   * @brief Deallocates device memory for the arrays.
+   */
+  void deallocate_device_arrays();
+                    
+  /**
+   * @brief Swaps two buffers on the device.
+   */
   inline void swap_buffers(double* &buf1, double* &buf2) {
     double* temp = buf1;
     buf1 = buf2;

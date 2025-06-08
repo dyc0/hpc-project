@@ -121,14 +121,10 @@ SWESolver::SWESolver(const std::string &h5_file, const double size_x, const doub
 void
 SWESolver::init_from_HDF5_file(const std::string &h5_file)
 {
-  read_2d_array_from_DF5(h5_file, "h0", this->h0_, this->nx_, this->ny_);
-  read_2d_array_from_DF5(h5_file, "hu0", this->hu0_, this->nx_, this->ny_);
-  read_2d_array_from_DF5(h5_file, "hv0", this->hv0_, this->nx_, this->ny_);
+  read_2d_array_from_DF5(h5_file, "h0", this->h_, this->nx_, this->ny_);
+  read_2d_array_from_DF5(h5_file, "hu0", this->hu_, this->nx_, this->ny_);
+  read_2d_array_from_DF5(h5_file, "hv0", this->hv_, this->nx_, this->ny_);
   read_2d_array_from_DF5(h5_file, "topography", this->z_, this->nx_, this->ny_);
-
-  this->h1_.resize(this->h0_.size(), 0.0);
-  this->hu1_.resize(this->hu0_.size(), 0.0);
-  this->hv1_.resize(this->hv0_.size(), 0.0);
 
   this->init_dx_dy();
 }
@@ -137,17 +133,13 @@ void
 SWESolver::init_gaussian()
 {
   // Initializing the grids
-  hu0_.resize(nx_ * ny_, 0.0);
-  hv0_.resize(nx_ * ny_, 0.0);
-  std::fill(hu0_.begin(), hu0_.end(), 0.0);
-  std::fill(hv0_.begin(), hv0_.end(), 0.0);
+  hu_.resize(nx_ * ny_, 0.0);
+  hv_.resize(nx_ * ny_, 0.0);
+  std::fill(hu_.begin(), hu_.end(), 0.0);
+  std::fill(hv_.begin(), hv_.end(), 0.0);
 
-  h0_.clear();
-  h0_.reserve(nx_ * ny_);
-
-  h1_.resize(nx_ * ny_);
-  hu1_.resize(nx_ * ny_);
-  hv1_.resize(nx_ * ny_);
+  h_.clear();
+  h_.reserve(nx_ * ny_);
 
   
   // Gaussian peak coordinates
@@ -169,12 +161,12 @@ SWESolver::init_gaussian()
       const double gauss_0 = 10.0 * std::exp(-((x - x0_0) * (x - x0_0) + (y - y0_0) * (y - y0_0)) / 1000.0);
       const double gauss_1 = 10.0 * std::exp(-((x - x0_1) * (x - x0_1) + (y - y0_1) * (y - y0_1)) / 1000.0);
 
-      h0_.push_back(10.0 + gauss_0 + gauss_1);
+      h_.push_back(10.0 + gauss_0 + gauss_1);
     }
   }
 
   // This is the floor topography
-  z_.resize(this->h0_.size());
+  z_.resize(this->h_.size());
   std::fill(z_.begin(), z_.end(), 0.0);
 
   this->init_dx_dy();
@@ -183,17 +175,10 @@ SWESolver::init_gaussian()
 void
 SWESolver::init_dummy_tsunami()
 {
-  hu0_.resize(nx_ * ny_);
-  hv0_.resize(nx_ * ny_);
-  std::fill(hu0_.begin(), hu0_.end(), 0.0);
-  std::fill(hv0_.begin(), hv0_.end(), 0.0);
-
-  h1_.resize(nx_ * ny_);
-  hu1_.resize(nx_ * ny_);
-  hv1_.resize(nx_ * ny_);
-  std::fill(h1_.begin(), h1_.end(), 0.0);
-  std::fill(hu1_.begin(), hu1_.end(), 0.0);
-  std::fill(hv1_.begin(), hv1_.end(), 0.0);
+  hu_.resize(nx_ * ny_);
+  hv_.resize(nx_ * ny_);
+  std::fill(hu_.begin(), hu_.end(), 0.0);
+  std::fill(hv_.begin(), hv_.end(), 0.0);
 
   const double x0_0 = 0.6 * size_x_;
   const double y0_0 = 0.6 * size_y_;
@@ -207,7 +192,7 @@ SWESolver::init_dummy_tsunami()
 
   // Creating topography and initial water height
   z_.resize(nx_ * ny_);
-  h0_.resize(nx_ * ny_);
+  h_.resize(nx_ * ny_);
   for (std::size_t j = 0; j < ny_; ++j)
   {
     for (std::size_t i = 0; i < nx_; ++i)
@@ -223,7 +208,7 @@ SWESolver::init_dummy_tsunami()
       at(z_, i, j) = z;
 
       double h0 = z < 0.0 ? -z + gauss_2 : 0.00001;
-      at(h0_, i, j) = h0;
+      at(h_, i, j) = h0;
     }
   }
   this->init_dx_dy();
@@ -232,17 +217,10 @@ SWESolver::init_dummy_tsunami()
 void
 SWESolver::init_dummy_slope()
 {
-  hu0_.resize(nx_ * ny_);
-  hv0_.resize(nx_ * ny_);
-  std::fill(hu0_.begin(), hu0_.end(), 0.0);
-  std::fill(hv0_.begin(), hv0_.end(), 0.0);
-
-  h1_.resize(nx_ * ny_);
-  hu1_.resize(nx_ * ny_);
-  hv1_.resize(nx_ * ny_);
-  std::fill(h1_.begin(), h1_.end(), 0.0);
-  std::fill(hu1_.begin(), hu1_.end(), 0.0);
-  std::fill(hv1_.begin(), hv1_.end(), 0.0);
+  hu_.resize(nx_ * ny_);
+  hv_.resize(nx_ * ny_);
+  std::fill(hu_.begin(), hu_.end(), 0.0);
+  std::fill(hv_.begin(), hv_.end(), 0.0);
 
   const double dx = size_x_ / nx_;
   const double dy = size_y_ / ny_;
@@ -251,7 +229,7 @@ SWESolver::init_dummy_slope()
 
   // Creating topography and initial water height
   z_.resize(nx_ * ny_);
-  h0_.resize(nx_ * ny_);
+  h_.resize(nx_ * ny_);
   for (std::size_t j = 0; j < ny_; ++j)
   {
     for (std::size_t i = 0; i < nx_; ++i)
@@ -264,7 +242,7 @@ SWESolver::init_dummy_slope()
       at(z_, i, j) = z;
 
       double h0 = z < 0.0 ? -z : 0.00001;
-      at(h0_, i, j) = h0;
+      at(h_, i, j) = h0;
     }
   }
   this->init_dx_dy();
@@ -284,53 +262,6 @@ SWESolver::init_dx_dy()
     {
       at(this->zdx_, i, j) = 0.5 * (at(this->z_, i + 1, j) - at(this->z_, i - 1, j)) / dx;
       at(this->zdy_, i, j) = 0.5 * (at(this->z_, i, j + 1) - at(this->z_, i, j - 1)) / dy;
-    }
-  }
-}
-
-double
-SWESolver::compute_time_step(const std::vector<double> &h,
-                             const std::vector<double> &hu,
-                             const std::vector<double> &hv,
-                             const double T,
-                             const double Tend) const
-{
-  double max_nu_sqr = 0.0;
-  double au{0.0};
-  double av{0.0};
-  // Potential spot for optimization
-  for (std::size_t j = 1; j < ny_ - 1; ++j)
-  {
-    for (std::size_t i = 1; i < nx_ - 1; ++i)
-    {
-      au = std::max(au, std::fabs(at(hu, i, j)));
-      av = std::max(av, std::fabs(at(hv, i, j)));
-      const double nu_u = std::fabs(at(hu, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
-      const double nu_v = std::fabs(at(hv, i, j)) / at(h, i, j) + sqrt(g * at(h, i, j));
-      max_nu_sqr = std::max(max_nu_sqr, nu_u * nu_u + nu_v * nu_v);
-    }
-  }
-
-  const double dx = size_x_ / nx_;
-  const double dy = size_y_ / ny_;
-  double dt = std::min(dx, dy) / (sqrt(2.0 * max_nu_sqr));
-  return std::min(dt, Tend - T);
-}
-
-void
-SWESolver::solve_step(const double dt,
-                      const std::vector<double> &h0,
-                      const std::vector<double> &hu0,
-                      const std::vector<double> &hv0,
-                      std::vector<double> &h,
-                      std::vector<double> &hu,
-                      std::vector<double> &hv) const
-{
-  for (std::size_t j = 1; j < ny_ - 1; ++j)
-  {
-    for (std::size_t i = 1; i < nx_ - 1; ++i)
-    {
-      // this->compute_kernel(i, j, dt, h0, hu0, hv0, h, hu, hv);
     }
   }
 }

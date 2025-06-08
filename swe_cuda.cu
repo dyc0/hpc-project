@@ -236,38 +236,6 @@ __global__ void compute_local_dt(double *h0, double *hu0, double *hv0,
 }
 
 
-__global__
-void min_reduce(const double* dt_local, double* dt_global, int N) {
-    // Taken from
-    // https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf
-    extern __shared__ double sdata[];
-
-    int tid = threadIdx.x;
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // We use a large value to mask out of bounds threads
-    sdata[tid] = (i < N) ? dt_local[i] : 1e10;
-    __syncthreads();
-
-    // Reduction is done halving the number of threads in each step
-    // 3 5 7 2 4 9 0 1
-    // 3 5 0 1
-    // 0 1
-    // 0
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s && (i + s) < N) {
-            sdata[tid] = fmin(sdata[tid], sdata[tid + s]);
-        }
-        __syncthreads();
-    }
-
-    // First thread in block writes result to global memory
-    if (tid == 0) {
-        dt_global[blockIdx.x] = sdata[0];
-    }
-}
-
-
 void log_cuda_error(cudaError_t err, std::string additional_info) {
   if (err != cudaSuccess) {
     std::cerr << "CUDA error: " << cudaGetErrorString(err) << " " << additional_info << std::endl;
@@ -277,42 +245,39 @@ void log_cuda_error(cudaError_t err, std::string additional_info) {
 
 
 void
-SWESolver::solve(const double Tend, const bool full_log, const std::size_t output_n, const std::string &fname_prefix)
+SWESolver::solve(const double Tend, const bool full_log, const std::size_t output_n, const std::string &fname_prefix, 
+                 int block_dim_x, int block_dim_y)
 {
   std::shared_ptr<XDMFWriter> writer;
   if (output_n > 0)
   {
     writer = std::make_shared<XDMFWriter>(fname_prefix, this->nx_, this->ny_, this->size_x_, this->size_y_, this->z_);
-    writer->add_h(h0_, 0.0);
+    writer->add_h(h_, 0.0);
   }
 
   double T = 0.0;
 
-  std::vector<double> &h = h1_;
-  std::vector<double> &hu = hu1_;
-  std::vector<double> &hv = hv1_;
-
-  std::vector<double> &h0 = h0_;
-  std::vector<double> &hu0 = hu0_;
-  std::vector<double> &hv0 = hv0_;
+  std::vector<double> &h = h_;
+  std::vector<double> &hu = hu_;
+  std::vector<double> &hv = hv_;
 
   // CUDA variables
   cudaError_t err;
 
   // Dimensions used for the computation of interior values
-  dim3 stencil_block_size(16, 16); // Define block size
+  dim3 stencil_block_size(block_dim_x, block_dim_y); // Define block size
   dim3 stencil_grid_size((nx_ + stencil_block_size.x - 1) / stencil_block_size.x, (ny_ + stencil_block_size.y - 1) / stencil_block_size.y);
   // Pad the shared memory of a tile, 3 padded shared arrays
   int shared_memory_size = 3 * (stencil_block_size.x + 2) * (stencil_block_size.y + 2) * sizeof(double);
   
   // Dimensions used for computation of boundary values
-  dim3 bdry_block_size(128);
+  dim3 bdry_block_size(block_dim_x * block_dim_y);
   dim3 bdry_grid_size(2 * (nx_ + ny_ + bdry_block_size.x - 1) / bdry_block_size.x);
 
   // Initialize CUDA arrays and constants
   initialize_cuda_constants();
   initialize_cuda_arrays();
-  copy_to_device(h0, hu0, hv0, h, hu, hv);
+  copy_to_device(h, hu, hv);
   err = cudaMemcpy(d_zdx, zdx_.data(), zdx_.size() * sizeof(double), cudaMemcpyHostToDevice);
   log_cuda_error(err, "Failed to copy zdx_ to device");
   err = cudaMemcpy(d_zdy, zdy_.data(), zdy_.size() * sizeof(double), cudaMemcpyHostToDevice);
@@ -350,11 +315,15 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
 
     // Can't avoid synchronization here, because we need to swap the buffers
     cudaDeviceSynchronize();
+
+// Using preprocessor directives to further optimize when profiling
+#ifndef PROFILING
     if (output_n > 0 && nt % output_n == 0)
     {
-      copy_from_device(h0, hu0, hv0, h, hu, hv);
+      copy_from_device(h, hu, hv);
       writer->add_h(h, T1);
     }
+#endif
     
     // Swap the old and new solutions
     swap_buffers(d_h, d_h0);
@@ -367,9 +336,11 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
 
   if (output_n > 0)
   {
-    copy_from_device(h0, hu0, hv0, h, hu, hv);
-    writer->add_h(h1_, T);
+    copy_from_device(h, hu, hv);
+    writer->add_h(h_, T);
   }
+
+  deallocate_device_arrays();
 
   std::cout << "Finished solving SWE." << std::endl;
 }
@@ -402,69 +373,82 @@ void SWESolver::initialize_cuda_arrays()
 {
   cudaError_t err;
 
-  err = cudaMalloc((void**)&d_h0, h0_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_h0, h_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_h0 on device");
-  err = cudaMalloc((void**)&d_hu0, hu0_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_hu0, hu_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_hu0 on device");
-  err = cudaMalloc((void**)&d_hv0, hv0_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_hv0, hv_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_hv0 on device");
-  err = cudaMalloc((void**)&d_h, h1_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_h, h_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_h on device");
-  err = cudaMalloc((void**)&d_hu, hu1_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_hu, hu_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_hu on device");
-  err = cudaMalloc((void**)&d_hv, hv1_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_hv, hv_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_hv on device");
   err = cudaMalloc((void**)&d_zdx, zdx_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_zdx on device");
   err = cudaMalloc((void**)&d_zdy, zdy_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_zdy on device");
-  err = cudaMalloc((void**)&d_local_dt, h0_.size() * sizeof(double));
+  err = cudaMalloc((void**)&d_local_dt, h_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_dt on device");
 }
 
 
-void SWESolver::copy_to_device(std::vector<double> &h0,
-                               std::vector<double> &hu0,
-                               std::vector<double> &hv0,
-                               std::vector<double> &h1,
-                               std::vector<double> &hu1,
-                               std::vector<double> &hv1)
+void SWESolver::copy_to_device(std::vector<double> &h,
+                               std::vector<double> &hu,
+                               std::vector<double> &hv)
 {
   cudaError_t err;
 
-  err = cudaMemcpy(d_h0, h0.data(), h0.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy h0_ to device");
-  err = cudaMemcpy(d_hu0, hu0.data(), hu0.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy hu0_ to device");
-  err = cudaMemcpy(d_hv0, hv0.data(), hv0.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy hv0_ to device");
-  err = cudaMemset(d_h, 0, h0_.size()*sizeof(double));
+  err = cudaMemcpy(d_h0, h.data(), h.size()*sizeof(double), cudaMemcpyHostToDevice);
+  log_cuda_error(err, "Failed to copy h_ to device");
+  err = cudaMemcpy(d_hu0, hu.data(), hu.size()*sizeof(double), cudaMemcpyHostToDevice);
+  log_cuda_error(err, "Failed to copy hu_ to device");
+  err = cudaMemcpy(d_hv0, hv.data(), hv.size()*sizeof(double), cudaMemcpyHostToDevice);
+  log_cuda_error(err, "Failed to copy hv_ to device");
+  err = cudaMemset(d_h, 0, h_.size()*sizeof(double));
   log_cuda_error(err, "Failed to clear d_h on device");
-  err = cudaMemset(d_hu, 0, hu0_.size()*sizeof(double));
+  err = cudaMemset(d_hu, 0, hu_.size()*sizeof(double));
   log_cuda_error(err, "Failed to clear d_hu on device");
-  err = cudaMemset(d_hv, 0, hv0_.size()*sizeof(double));
+  err = cudaMemset(d_hv, 0, hv_.size()*sizeof(double));
   log_cuda_error(err, "Failed to clear d_hv on device");
 }
 
-void SWESolver::copy_from_device(std::vector<double>  &h0,
-                                  std::vector<double> &hu0,
-                                  std::vector<double> &hv0,
-                                  std::vector<double> &h1,
-                                  std::vector<double> &hu1,
-                                  std::vector<double> &hv1)
+void SWESolver::copy_from_device(std::vector<double>  &h,
+                                  std::vector<double> &hu,
+                                  std::vector<double> &hv)
 {
   cudaError_t err;
 
-  err = cudaMemcpy(h0.data(), d_h0, h0.size()*sizeof(double), cudaMemcpyDeviceToHost);
-  log_cuda_error(err, "Failed to copy d_h0 to h0_");
-  err = cudaMemcpy(hu0.data(), d_hu0, hu0.size()*sizeof(double), cudaMemcpyDeviceToHost); 
-  log_cuda_error(err, "Failed to copy d_hu0 to hu0_");
-  err = cudaMemcpy(hv0.data(), d_hv0, hv0.size()*sizeof(double), cudaMemcpyDeviceToHost);
-  log_cuda_error(err, "Failed to copy d_hv0 to hv0_");
-  err = cudaMemcpy(h1.data(), d_h, h1.size()*sizeof(double), cudaMemcpyDeviceToHost);
-  log_cuda_error(err, "Failed to copy d_h to h1_");
-  err = cudaMemcpy(hu1.data(), d_hu, hu1.size()*sizeof(double), cudaMemcpyDeviceToHost);
-  log_cuda_error(err, "Failed to copy d_hu to hu1_");
-  err = cudaMemcpy(hv1.data(), d_hv, hv1.size()*sizeof(double), cudaMemcpyDeviceToHost);
-  log_cuda_error(err, "Failed to copy d_hv to hv1_");
+  err = cudaMemcpy(h.data(), d_h, h.size()*sizeof(double), cudaMemcpyDeviceToHost);
+  log_cuda_error(err, "Failed to copy d_h to h_");
+  err = cudaMemcpy(hu.data(), d_hu, hu.size()*sizeof(double), cudaMemcpyDeviceToHost);
+  log_cuda_error(err, "Failed to copy d_hu to hu_");
+  err = cudaMemcpy(hv.data(), d_hv, hv.size()*sizeof(double), cudaMemcpyDeviceToHost);
+  log_cuda_error(err, "Failed to copy d_hv to hv_");
+}
+
+
+void SWESolver::deallocate_device_arrays()
+{
+  cudaError_t err;
+
+  err = cudaFree(d_h0);
+  log_cuda_error(err, "Failed to free d_h0");
+  err = cudaFree(d_hu0);
+  log_cuda_error(err, "Failed to free d_hu0");
+  err = cudaFree(d_hv0);
+  log_cuda_error(err, "Failed to free d_hv0");
+  err = cudaFree(d_h);
+  log_cuda_error(err, "Failed to free d_h");
+  err = cudaFree(d_hu);
+  log_cuda_error(err, "Failed to free d_hu");
+  err = cudaFree(d_hv);
+  log_cuda_error(err, "Failed to free d_hv");
+  err = cudaFree(d_zdx);
+  log_cuda_error(err, "Failed to free d_zdx");
+  err = cudaFree(d_zdy);
+  log_cuda_error(err, "Failed to free d_zdy");
+  err = cudaFree(d_local_dt);
+  log_cuda_error(err, "Failed to free d_local_dt");
 }

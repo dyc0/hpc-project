@@ -8,4 +8,4 @@
 
 module purge
 module load gcc cuda hdf5
-srun nvprof ./build/swe
+srun nvprof --log-file "nvprof_${BLOCK_DIM_X}_${BLOCK_DIM_Y}.out" ./build/swe $BLOCK_DIM_X $BLOCK_DIM_Y

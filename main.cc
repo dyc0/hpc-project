@@ -2,53 +2,112 @@
 
 #include <string>
 #include <cstddef>
+#include <iostream>
+
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include <chrono>
 
 int
-main()
+main(int argc, char *argv[])
 {
   // Uncomment the option you want to run.
+  
+  // ./swe <block-dim-x> <block-dim-y> [<output-n>] [<full-log>] [<case> <grid-dim-x> <grid-dim-y>]
+  // ./swe <block-dim-x> <block-dim-y> [<output-n>] [<full-log>] [<input-file> <size>]
 
-  // Option 1 - Solving simple problem: water drops in a box
-  // const int test_case_id = 1;  // Water drops in a box
-  // const double Tend = 1.0;     // Simulation time in hours
-  // const std::size_t nx = 1000; // Number of cells per direction.
-  // const std::size_t ny = 1000; // Number of cells per direction.
-  // const std::size_t output_n = 0; // For profiling, I use 0
-  //                                 // TODO: Come back to this and profile IO
-  // const std::string output_fname = "parallel_tests/water_drops";
-  // const bool full_log = false;
+  if (argc < 3 || argc > 8)
+  {
+    std::cout << "Usage: " << argv[0] << " <block-dim-x> <block-dim-y> [<output-n>] [<full-log>] [<case> <grid-dim-x> <grid-dim-y> | input-file]" << std::endl;
+    return 1;
+  }
 
-  // SWESolver solver(test_case_id, nx, ny);
-  // solver.solve(Tend, full_log, output_n, output_fname);
+  const int block_dim_x = std::stoi(argv[1]);
+  const int block_dim_y = std::stoi(argv[2]);
 
-  // // Option 2 - Solving analytical (dummy) tsunami example.
-  // const int test_case_id = 2;  // Analytical tsunami test case
-  // const double Tend = 1.0;     // Simulation time in hours
-  // const std::size_t nx = 1000; // Number of cells per direction.
-  // const std::size_t ny = 1000; // Number of cells per direction.
-  // const std::size_t output_n = 20; // For profiling, I use 0
-  // const std::string output_fname = "parallel_tests/analytical_tsunami";
-  // const bool full_log = false;
+  int output_n = 20; // If compiled with profiling, nothing is written no matter the value.
+  if (argc > 3)
+    output_n = std::stoi(argv[3]);
 
-  // SWESolver solver(test_case_id, nx, ny);
-  // solver.solve(Tend, full_log, output_n, output_fname);
+  bool full_log = false;
+  if (argc > 4)
+    full_log = std::stoi(argv[4]) != 0;
 
-  // // Option 3 - Solving tsunami problem with data loaded from file.
-  const double Tend = 0.2;   // Simulation time in hours
-  const double size = 500.0; // Size of the domain in km
+  double Tend = 1.0;     // Simulation time in hours
 
-  // const std::string fname = "Data_nx501_500km.h5"; // File containg initial data (501x501 mesh).
-  const std::string fname = "data/Data_nx1001_500km.h5"; // File containg initial data (1001x1001 mesh).
-  // const std::string fname = "Data_nx2001_500km.h5"; // File containg initial data (2001x2001 mesh).
-  // const std::string fname = "Data_nx4001_500km.h5"; // File containg initial data (4001x4001 mesh).
-  // const std::string fname = "Data_nx8001_500km.h5"; // File containg initial data (8001x8001 mesh).
+  std::size_t nx = 4096;
+  std::size_t ny = 4096;
+  int test_case_id = 1;
+  if (argc == 8)
+  {
+    test_case_id = std::stoi(argv[5]);
+    if (test_case_id < 1 || test_case_id > 2)
+    {
+      std::cerr << "Invalid test case ID. It should be 1 (water drops in a box) or 2 (analytical tsunami)." << std::endl;
+      return 1;
+    }
+    nx = std::stoi(argv[6]);
+    ny = std::stoi(argv[7]);
+  }
 
-  const std::size_t output_n = 20;
-  const std::string output_fname = "tsunami";
-  const bool full_log = false;
+  std::string input_file;
+  double size = 500.0;
+  if (argc == 6)
+  {
+    input_file = argv[5];
+    test_case_id = 3;
+    Tend = 0.2; // Default simulation time for tsunami case
+  }
+  else if (argc == 7)
+  {
+    input_file = argv[5];
+    size = std::stod(argv[6]);
+    test_case_id = 3;
+    Tend = 0.2; // Default simulation time for tsunami case
+  }
+  
 
-  SWESolver solver(fname, size, size);
-  solver.solve(Tend, full_log, output_n, output_fname);
+  std::string output_fname = "";
+  if (test_case_id == 1)
+    output_fname += "water_drops";
+  else if (test_case_id == 2)
+    output_fname += "analytical_tsunami";
+  else if (test_case_id == 3)
+    output_fname += "tsunami_" + input_file;
+
+  output_fname += "_" + std::to_string(nx) + "x" + std::to_string(ny);
+  output_fname += "_" + std::to_string(block_dim_x) + "x" + std::to_string(block_dim_y);
+
+  struct stat st = {0};
+  if (stat(output_fname.c_str(), &st) == -1) {
+    mkdir(output_fname.c_str(), 0755);
+  }
+  
+  output_fname += "/output";
+  
+  std::cout << "Running test case " << test_case_id << " with grid size " << nx << "x" << ny
+            << ", and block size " << block_dim_x << "x" << block_dim_y << std::endl;
+
+  std::chrono::_V2::system_clock::time_point start_time, end_time;
+  if (test_case_id == 1 || test_case_id == 2)
+  {
+    SWESolver solver(test_case_id, nx, ny);
+    start_time = std::chrono::system_clock::now();
+    solver.solve(Tend, full_log, output_n, output_fname, block_dim_x, block_dim_y);
+    end_time = std::chrono::system_clock::now();
+  }
+  else if (test_case_id == 3)
+  {
+    SWESolver solver(input_file, size, size);
+    start_time = std::chrono::system_clock::now();
+    solver.solve(Tend, full_log, output_n, output_fname, block_dim_x, block_dim_y);
+    end_time = std::chrono::system_clock::now();
+  }
+
+  std::cout << "Total solve time: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count()
+            << " ms" << std::endl;
 
   return 0;
 }
