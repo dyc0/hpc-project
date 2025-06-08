@@ -30,7 +30,7 @@ __device__ void compute_kernel(int i, int j,
                                int gi, int gj, 
                                double *h0, double *hu0, double *hv0, 
                                double *h, double *hu, double *hv, 
-                               double *zdx, double *zdy)
+                               double zdx, double zdy)
 {
   double C1x = 0.5 * d_dt / d_dx;
   double C1y = 0.5 * d_dt / d_dy;
@@ -50,7 +50,7 @@ __device__ void compute_kernel(int i, int j,
   // execution.
   hij = (hij > 0.0001) * hij + (hij <= 0.0001) * 1.0e-5; 
   at(hu, gi, gj, d_nx) = (hij > 0.0001) * (
-    0.25 * (at(hu0, i, j - 1, ts) + at(hu0, i, j + 1, ts) + at(hu0, i - 1, j, ts) + at(hu0, i + 1, j, ts)) - C2 * hij * at(zdx, i, j, ts)
+    0.25 * (at(hu0, i, j - 1, ts) + at(hu0, i, j + 1, ts) + at(hu0, i - 1, j, ts) + at(hu0, i + 1, j, ts)) - C2 * hij * zdx
     + C1x
         * (at(hu0, i - 1, j, ts) * at(hu0, i - 1, j, ts) / at(h0, i - 1, j, ts) + C3 * at(h0, i - 1, j, ts) * at(h0, i - 1, j, ts)
             - at(hu0, i + 1, j, ts) * at(hu0, i + 1, j, ts) / at(h0, i + 1, j, ts) - C3 * at(h0, i + 1, j, ts) * at(h0, i + 1, j, ts))
@@ -60,7 +60,7 @@ __device__ void compute_kernel(int i, int j,
     );
 
   at(hv, gi, gj, d_nx) = (hij > 0.0001) * (
-    0.25 * (at(hv0, i, j - 1, ts) + at(hv0, i, j + 1, ts) + at(hv0, i - 1, j, ts) + at(hv0, i + 1, j, ts)) - C2 * hij * at(zdy, i, j, ts)
+    0.25 * (at(hv0, i, j - 1, ts) + at(hv0, i, j + 1, ts) + at(hv0, i - 1, j, ts) + at(hv0, i + 1, j, ts)) - C2 * hij * zdy
     + C1x
         * (at(hu0, i - 1, j, ts) * at(hv0, i - 1, j, ts) / at(h0, i - 1, j, ts)
             - at(hu0, i + 1, j, ts) * at(hv0, i + 1, j, ts) / at(h0, i + 1, j,ts))
@@ -73,17 +73,18 @@ __device__ void compute_kernel(int i, int j,
 
 __global__ void compute_step(double *h0, double *hu0, double *hv0, 
                              double *h, double *hu, double *hv, 
-                             double *zdx, double *zdy)
+                             double *d_zdx, double *d_zdy)
 {
   extern __shared__ double shared_memory[];
 
   // Shared memory arrays with padding for ghost cells
-  double *s_h0, *s_hu0, *s_hv0, *s_zdx, *s_zdy;
+  double *s_h0, *s_hu0, *s_hv0;
   s_h0  = &shared_memory[0];
   s_hu0 = &s_h0[(blockDim.x + 2) * (blockDim.y + 2)];
   s_hv0 = &s_hu0[(blockDim.x + 2) * (blockDim.y + 2)];
-  s_zdx = &s_hv0[(blockDim.x + 2) * (blockDim.y + 2)];
-  s_zdy = &s_zdx[(blockDim.x + 2) * (blockDim.y + 2)];
+
+  double zdx;
+  double zdy;
 
   // Thread Indices in shared memory (tiles), with padding
   int si = threadIdx.x + 1;
@@ -99,8 +100,8 @@ __global__ void compute_step(double *h0, double *hu0, double *hv0,
     at(s_h0,  si, sj, blockDim.x + 2) = at(h0,  gi, gj, d_nx);
     at(s_hu0, si, sj, blockDim.x + 2) = at(hu0, gi, gj, d_nx);
     at(s_hv0, si, sj, blockDim.x + 2) = at(hv0, gi, gj, d_nx);
-    at(s_zdx, si, sj, blockDim.x + 2) = at(zdx, gi, gj, d_nx);
-    at(s_zdy, si, sj, blockDim.x + 2) = at(zdy, gi, gj, d_nx);
+    zdx = at(d_zdx, gi, gj, d_nx);
+    zdy = at(d_zdy, gi, gj, d_nx);
   }
 
   // Copy ghost cells. I don't think I can avoid branching here.
@@ -111,16 +112,12 @@ __global__ void compute_step(double *h0, double *hu0, double *hv0,
     at(s_h0,  0, sj, blockDim.x + 2) = at(h0,  gi - 1, gj, d_nx);
     at(s_hu0, 0, sj, blockDim.x + 2) = at(hu0, gi - 1, gj, d_nx);
     at(s_hv0, 0, sj, blockDim.x + 2) = at(hv0, gi - 1, gj, d_nx);
-    at(s_zdx, 0, sj, blockDim.x + 2) = at(zdx, gi - 1, gj, d_nx);
-    at(s_zdy, 0, sj, blockDim.x + 2) = at(zdy, gi - 1, gj, d_nx);
   }
   if (sj == 1 && gi < d_nx - 1 && gj < d_ny - 1) {
     // Top ghost cells
     at(s_h0,  si, 0, blockDim.x + 2) = at(h0,  gi, gj - 1, d_nx);
     at(s_hu0, si, 0, blockDim.x + 2) = at(hu0, gi, gj - 1, d_nx);
     at(s_hv0, si, 0, blockDim.x + 2) = at(hv0, gi, gj - 1, d_nx);
-    at(s_zdx, si, 0, blockDim.x + 2) = at(zdx, gi, gj - 1, d_nx);
-    at(s_zdy, si, 0, blockDim.x + 2) = at(zdy, gi, gj - 1, d_nx);
   }
 
   // Copying bottom and right ghost cells is a bit more tricky, because a block
@@ -140,8 +137,6 @@ __global__ void compute_step(double *h0, double *hu0, double *hv0,
     at(s_h0,  si + 1, sj, blockDim.x + 2) = at(h0,  gi + 1, gj, d_nx);
     at(s_hu0, si + 1, sj, blockDim.x + 2) = at(hu0, gi + 1, gj, d_nx);
     at(s_hv0, si + 1, sj, blockDim.x + 2) = at(hv0, gi + 1, gj, d_nx);
-    at(s_zdx, si + 1, sj, blockDim.x + 2) = at(zdx, gi + 1, gj, d_nx);
-    at(s_zdy, si + 1, sj, blockDim.x + 2) = at(zdy, gi + 1, gj, d_nx);
   }
   // The previous reasoning is repeated for the bottom ghost cells.
   if (((sj == blockDim.y && gj < d_ny-1 && gj != d_ny-2) || (gj == d_ny-2)) && gi < d_nx - 1) {
@@ -149,15 +144,13 @@ __global__ void compute_step(double *h0, double *hu0, double *hv0,
     at(s_h0,  si, sj + 1, blockDim.x + 2) = at(h0,  gi, gj + 1, d_nx);
     at(s_hu0, si, sj + 1, blockDim.x + 2) = at(hu0, gi, gj + 1, d_nx);
     at(s_hv0, si, sj + 1, blockDim.x + 2) = at(hv0, gi, gj + 1, d_nx);
-    at(s_zdx, si, sj + 1, blockDim.x + 2) = at(zdx, gi, gj + 1, d_nx);
-    at(s_zdy, si, sj + 1, blockDim.x + 2) = at(zdy, gi, gj + 1, d_nx);
   }
 
   __syncthreads();
 
   // Don't do boundaries. gi, gj > 0 by design, so we only check the upper bounds.
   if (gi < d_nx-1 && gj < d_ny-1)
-    compute_kernel(si, sj, gi, gj, s_h0, s_hu0, s_hv0, h, hu, hv, s_zdx, s_zdy);
+    compute_kernel(si, sj, gi, gj, s_h0, s_hu0, s_hv0, h, hu, hv, zdx, zdy);
 }
 
 
@@ -237,10 +230,10 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   cudaError_t err;
 
   // Dimensions used for the computation of interior values
-  dim3 stencil_block_size(16, 16); // Define block size
+  dim3 stencil_block_size(1, 128); // Define block size
   dim3 stencil_grid_size((nx_ + stencil_block_size.x - 1) / stencil_block_size.x, (ny_ + stencil_block_size.y - 1) / stencil_block_size.y);
-  // Pad the shared memory of a tile, 5 padded shared arrays
-  int shared_memory_size = 5 * (stencil_block_size.x + 2) * (stencil_block_size.y + 2) * sizeof(double);
+  // Pad the shared memory of a tile, 3 padded shared arrays
+  int shared_memory_size = 3 * (stencil_block_size.x + 2) * (stencil_block_size.y + 2) * sizeof(double);
   
   // Dimensions used for computation of boundary values
   dim3 bdry_block_size(128);
