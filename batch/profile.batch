@@ -7,5 +7,5 @@
 #SBATCH --account=math-454
 
 module purge
-module load gcc cuda
+module load gcc cuda hdf5
 srun nvprof ./build/swe

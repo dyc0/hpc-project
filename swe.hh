@@ -172,4 +172,10 @@ private:
                         std::vector<double> &h1,
                         std::vector<double> &hu1,
                         std::vector<double> &hv1);
+  inline void swap_buffers(double* &buf1, double* &buf2) {
+    double* temp = buf1;
+    buf1 = buf2;
+    buf2 = temp;
+  }
+  
 };

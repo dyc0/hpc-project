@@ -319,7 +319,6 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   log_cuda_error(err, "Failed to copy zdy_ to device");
   // Thread will perform min-reduction
   thrust::device_ptr<double> d_dt_ptr(d_local_dt);
-  double *tmp;      // For buffer swapping
 
   std::cout << "Solving SWE..." << std::endl;
   
@@ -329,61 +328,46 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   {
     // Compute the time left to the end of the simulation
     Tleft = Tend - T;
-    cudaMemcpyToSymbol(d_Tleft, &Tleft, sizeof(double));
-    cudaDeviceSynchronize();
+    err = cudaMemcpyToSymbol(d_Tleft, &Tleft, sizeof(double));
+    log_cuda_error(err, "Failed to copy d_Tleft to constant memory");
 
     // Calculate dt per cell
     compute_local_dt<<<stencil_grid_size, stencil_block_size>>>(d_h0, d_hu0, d_hv0, d_local_dt);
     log_cuda_error(cudaGetLastError(), "Failed to launch compute_local_dt kernel");
+    // Thrust launches a new kernel, so this should be sequential with no synchronization issues
     dt = thrust::reduce(d_dt_ptr, d_dt_ptr + (nx_ * ny_), 1e10, thrust::minimum<double>());
-    cudaMemcpyToSymbol(d_dt, &dt, sizeof(double));
-
-    // Reduce the local dt to find the global dt
-    // min_reduce<<<stencil_grid_size.x * stencil_grid_size.y, stencil_block_size.x* stencil_block_size.y, stencil_block_size.x * stencil_block_size.y * sizeof(double)>>>(d_dt, d_block_dt, d_nx * d_ny);
-    // min_reduce<<<1, stencil_grid_size.x * stencil_grid_size.y, stencil_grid_size.x * stencil_grid_size.y * sizeof(double)>>>(d_block_dt, d_dt, stencil_grid_size.x * stencil_grid_size.y);
-
-    // const double dt = this->compute_time_step(h0, hu0, hv0, T, Tend);
-    // err = cudaMemcpyToSymbol(d_dt, &dt, sizeof(double), 0, cudaMemcpyHostToDevice);
-    // log_cuda_error(err, "Failed to copy dt to constant memory");
-
+    err = cudaMemcpyToSymbol(d_dt, &dt, sizeof(double));
+    log_cuda_error(err, "Failed to copy d_dt to constant memory");
+    
     const double T1 = T + dt;
-
     printf("Computing T: %2.4f hr  (dt = %.2e s) -- %3.3f%%", T1, dt * 3600, 100 * T1 / Tend);
     std::cout << (full_log ? "\n" : "\r") << std::flush;
-
-    copy_to_device(h0, hu0, hv0, h, hu, hv);
+    
     update_bcs<<<bdry_grid_size, bdry_block_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv);
 
     compute_step<<<stencil_grid_size, stencil_block_size, shared_memory_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
     log_cuda_error(cudaGetLastError(), "Failed to launch compute_step kernel");
 
+    // Can't avoid synchronization here, because we need to swap the buffers
     cudaDeviceSynchronize();
-    copy_from_device(h0, hu0, hv0, h, hu, hv);
-
     if (output_n > 0 && nt % output_n == 0)
     {
+      copy_from_device(h0, hu0, hv0, h, hu, hv);
       writer->add_h(h, T1);
     }
-    ++nt;
-
+    
     // Swap the old and new solutions
-    std::swap(h, h0);
-    std::swap(hu, hu0);
-    std::swap(hv, hv0);
-
+    swap_buffers(d_h, d_h0);
+    swap_buffers(d_hu, d_hu0);
+    swap_buffers(d_hv, d_hv0);
+    
+    ++nt;
     T = T1;
-  }
-
-  // Copying last computed values to h1_, hu1_, hv1_ (if needed)
-  if (&h0 != &h1_)
-  {
-    h1_ = h0;
-    hu1_ = hu0;
-    hv1_ = hv0;
   }
 
   if (output_n > 0)
   {
+    copy_from_device(h0, hu0, hv0, h, hu, hv);
     writer->add_h(h1_, T);
   }
 
@@ -454,12 +438,12 @@ void SWESolver::copy_to_device(std::vector<double> &h0,
   log_cuda_error(err, "Failed to copy hu0_ to device");
   err = cudaMemcpy(d_hv0, hv0.data(), hv0.size()*sizeof(double), cudaMemcpyHostToDevice);
   log_cuda_error(err, "Failed to copy hv0_ to device");
-  err = cudaMemcpy(d_h, h1.data(), h1.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy h1_ to device");
-  err = cudaMemcpy(d_hu, hu1.data(), hu1.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy hu1_ to device");
-  err = cudaMemcpy(d_hv, hv1.data(), hv1.size()*sizeof(double), cudaMemcpyHostToDevice);
-  log_cuda_error(err, "Failed to copy hv1_ to device");
+  err = cudaMemset(d_h, 0, h0_.size()*sizeof(double));
+  log_cuda_error(err, "Failed to clear d_h on device");
+  err = cudaMemset(d_hu, 0, hu0_.size()*sizeof(double));
+  log_cuda_error(err, "Failed to clear d_hu on device");
+  err = cudaMemset(d_hv, 0, hv0_.size()*sizeof(double));
+  log_cuda_error(err, "Failed to clear d_hv on device");
 }
 
 void SWESolver::copy_from_device(std::vector<double>  &h0,
