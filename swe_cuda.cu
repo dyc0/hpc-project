@@ -12,14 +12,21 @@
 #include <cmath>
 #include <memory>
 
+#include <thrust/device_ptr.h>
+#include <thrust/reduce.h>
+
 
 __constant__ int d_nx;
 __constant__ int d_ny;
+
 __constant__ double d_dx;
 __constant__ double d_dy;
-__constant__ double d_dt;
+
 __constant__ double d_g;
 __constant__ double d_reflect;
+
+__constant__ double d_Tleft;
+__constant__ double d_dt;
 
 __forceinline__ __device__ double& at(double *array, int i, int j, int stride)
 {
@@ -198,6 +205,69 @@ __global__ void update_bcs(double *h0, double *hu0, double *hv0,
 }
 
 
+__global__ void compute_local_dt(double *h0, double *hu0, double *hv0, 
+                                 double *local_dt)
+{
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  int j = blockIdx.y * blockDim.y + threadIdx.y;
+  if (i >= d_nx || j >= d_ny) return;
+
+  double h =  at(h0, i, j, d_nx);
+  if (h < 1e-9) {
+    // We are dry. Set dt to a large value.
+    at(local_dt, i, j, d_nx) = 1e10;
+    return;
+  }
+
+  double hu = at(hu0, i, j, d_nx);
+  double hv = at(hv0, i, j, d_nx);
+  double inv_h = 1 / h;
+  double sqrt_gh = sqrt(d_g * h);
+
+  // Compute wave speeds
+  double nu_u = fabs(hu * inv_h) + sqrt_gh;
+  double nu_v = fabs(hv * inv_h) + sqrt_gh;
+  double ws = nu_u * nu_u + nu_v * nu_v;
+
+  double d_min = (d_dx <  d_dy) * d_dx + 
+                 (d_dx >= d_dy) * d_dy;
+  
+  at(local_dt, i, j, d_nx) = fmin(d_min / sqrt(2 * ws), d_Tleft);
+}
+
+
+__global__
+void min_reduce(const double* dt_local, double* dt_global, int N) {
+    // Taken from
+    // https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf
+    extern __shared__ double sdata[];
+
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // We use a large value to mask out of bounds threads
+    sdata[tid] = (i < N) ? dt_local[i] : 1e10;
+    __syncthreads();
+
+    // Reduction is done halving the number of threads in each step
+    // 3 5 7 2 4 9 0 1
+    // 3 5 0 1
+    // 0 1
+    // 0
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s && (i + s) < N) {
+            sdata[tid] = fmin(sdata[tid], sdata[tid + s]);
+        }
+        __syncthreads();
+    }
+
+    // First thread in block writes result to global memory
+    if (tid == 0) {
+        dt_global[blockIdx.x] = sdata[0];
+    }
+}
+
+
 void log_cuda_error(cudaError_t err, std::string additional_info) {
   if (err != cudaSuccess) {
     std::cerr << "CUDA error: " << cudaGetErrorString(err) << " " << additional_info << std::endl;
@@ -230,7 +300,7 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   cudaError_t err;
 
   // Dimensions used for the computation of interior values
-  dim3 stencil_block_size(1, 128); // Define block size
+  dim3 stencil_block_size(16, 16); // Define block size
   dim3 stencil_grid_size((nx_ + stencil_block_size.x - 1) / stencil_block_size.x, (ny_ + stencil_block_size.y - 1) / stencil_block_size.y);
   // Pad the shared memory of a tile, 3 padded shared arrays
   int shared_memory_size = 3 * (stencil_block_size.x + 2) * (stencil_block_size.y + 2) * sizeof(double);
@@ -247,17 +317,34 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
   log_cuda_error(err, "Failed to copy zdx_ to device");
   err = cudaMemcpy(d_zdy, zdy_.data(), zdy_.size() * sizeof(double), cudaMemcpyHostToDevice);
   log_cuda_error(err, "Failed to copy zdy_ to device");
+  // Thread will perform min-reduction
+  thrust::device_ptr<double> d_dt_ptr(d_local_dt);
   double *tmp;      // For buffer swapping
 
   std::cout << "Solving SWE..." << std::endl;
   
-
+  double Tleft, dt;
   std::size_t nt = 1;
   while (T < Tend)
   {
-    const double dt = this->compute_time_step(h0, hu0, hv0, T, Tend);
-    err = cudaMemcpyToSymbol(d_dt, &dt, sizeof(double), 0, cudaMemcpyHostToDevice);
-    log_cuda_error(err, "Failed to copy dt to constant memory");
+    // Compute the time left to the end of the simulation
+    Tleft = Tend - T;
+    cudaMemcpyToSymbol(d_Tleft, &Tleft, sizeof(double));
+    cudaDeviceSynchronize();
+
+    // Calculate dt per cell
+    compute_local_dt<<<stencil_grid_size, stencil_block_size>>>(d_h0, d_hu0, d_hv0, d_local_dt);
+    log_cuda_error(cudaGetLastError(), "Failed to launch compute_local_dt kernel");
+    dt = thrust::reduce(d_dt_ptr, d_dt_ptr + (nx_ * ny_), 1e10, thrust::minimum<double>());
+    cudaMemcpyToSymbol(d_dt, &dt, sizeof(double));
+
+    // Reduce the local dt to find the global dt
+    // min_reduce<<<stencil_grid_size.x * stencil_grid_size.y, stencil_block_size.x* stencil_block_size.y, stencil_block_size.x * stencil_block_size.y * sizeof(double)>>>(d_dt, d_block_dt, d_nx * d_ny);
+    // min_reduce<<<1, stencil_grid_size.x * stencil_grid_size.y, stencil_grid_size.x * stencil_grid_size.y * sizeof(double)>>>(d_block_dt, d_dt, stencil_grid_size.x * stencil_grid_size.y);
+
+    // const double dt = this->compute_time_step(h0, hu0, hv0, T, Tend);
+    // err = cudaMemcpyToSymbol(d_dt, &dt, sizeof(double), 0, cudaMemcpyHostToDevice);
+    // log_cuda_error(err, "Failed to copy dt to constant memory");
 
     const double T1 = T + dt;
 
@@ -268,8 +355,7 @@ SWESolver::solve(const double Tend, const bool full_log, const std::size_t outpu
     update_bcs<<<bdry_grid_size, bdry_block_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv);
 
     compute_step<<<stencil_grid_size, stencil_block_size, shared_memory_size>>>(d_h0, d_hu0, d_hv0, d_h, d_hu, d_hv, d_zdx, d_zdy);
-    err = cudaGetLastError();
-    log_cuda_error(err, "Failed to launch compute_step kernel");
+    log_cuda_error(cudaGetLastError(), "Failed to launch compute_step kernel");
 
     cudaDeviceSynchronize();
     copy_from_device(h0, hu0, hv0, h, hu, hv);
@@ -348,6 +434,8 @@ void SWESolver::initialize_cuda_arrays()
   log_cuda_error(err, "Failed to allocate d_zdx on device");
   err = cudaMalloc((void**)&d_zdy, zdy_.size() * sizeof(double));
   log_cuda_error(err, "Failed to allocate d_zdy on device");
+  err = cudaMalloc((void**)&d_local_dt, h0_.size() * sizeof(double));
+  log_cuda_error(err, "Failed to allocate d_dt on device");
 }
 
 
